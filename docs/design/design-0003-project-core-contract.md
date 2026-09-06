@@ -215,10 +215,22 @@ DuckDB를 검토한다. DB를 도입할 때에는 사용자 데이터 디렉터�
 
 ## W-01 완료 조건
 
-- [ ] `ProjectTime`과 `FrameRate`가 이 문서의 변환 및 반올림 규칙을 구현한다.
-- [ ] 프로젝트·미디어·클립·고정 트랙 모델이 생성 시 불변식을 검증한다.
-- [ ] 명령 실행기가 성공, 실패, undo/redo와 이력 분기를 원자적으로 처리한다.
-- [ ] 전체 프로젝트 스냅샷 없이 대표 프로젝트·미디어·클립 명령을 되돌릴 수 있다.
-- [ ] 프로젝트 스키마 초안과 DB 미사용 판단이 문서화됐다.
-- [ ] 새 코어 테스트와 기존 UI 목업 회귀 테스트가 모두 통과한다.
-- [ ] Ruff, strict mypy와 `git diff --check`가 통과한다.
+- [x] `ProjectTime`과 `FrameRate`가 이 문서의 변환 및 반올림 규칙을 구현한다.
+- [x] 프로젝트·미디어·클립·고정 트랙 모델이 생성 시 불변식을 검증한다.
+- [x] 명령 실행기가 성공, 실패, undo/redo와 이력 분기를 원자적으로 처리한다.
+- [x] 전체 프로젝트 스냅샷 없이 대표 프로젝트·미디어·클립 명령을 되돌릴 수 있다.
+- [x] 프로젝트 스키마 초안과 DB 미사용 판단이 문서화됐다.
+- [x] 새 코어 테스트와 기존 UI 목업 회귀 테스트가 모두 통과한다.
+- [x] Ruff, strict mypy와 `git diff --check`가 통과한다.
+
+## 구현 결과
+
+| 계약 | 구현 | 자동 검증 |
+| --- | --- | --- |
+| 시간과 프레임률 | `src/movie_maker/project/time.py` | `tests/project/test_time.py` |
+| 불변 프로젝트·미디어·클립·트랙 | `src/movie_maker/project/model.py` | `tests/project/test_model.py` |
+| 명령, 역명령과 세션 이력 | `src/movie_maker/project/commands.py` | `tests/project/test_commands.py` |
+
+W-01 완료 시 코어 집중 테스트 30개와 기존 UI 목업 테스트 24개를 합한 54개 테스트가 통과했다.
+프로젝트 코어의 import 경계도 검사하여 Qt, FFmpeg, 파일 I/O와 데이터베이스 의존성이 없음을
+확인했다. 다음 작업은 이 코어를 사용해 실제 미디어 참조를 만드는 W-02다.
