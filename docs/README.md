@@ -18,7 +18,9 @@
 | 9 | [MOCK-0003: 검토 기록과 UI 기준선](mock/mock-0003-review-log.md) | 승인된 기준선, 반영 이슈와 실제 로직 연결 순서 |
 | 10 | [ADR-0001: Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) | 현재 기술 스택과 실행 환경을 선택한 이유 및 제약 |
 | 11 | [ADR-0002: 명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) | MVP 편집 명령 구조와 1.0 실행 취소·다시 실행의 기반 |
-| 12 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
+| 12 | [ADR-0003: 프로젝트 코어 상태, 시간 단위와 저장 경계](decisions/adr-0003-project-core-state-and-storage.md) | W-01 시간·불변 모델·명령 원자성과 DB 미사용 결정 |
+| 13 | [DESIGN-0003: 프로젝트 코어 계약](design/design-0003-project-core-contract.md) | 프로젝트 스키마 초안, 모델 불변식과 명령 프로토콜 |
+| 14 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
 
 제품 방향만 파악할 때는 1~4번을 읽는다. 화면을 변경하려면 DESIGN과 MOCK 문서까지, 실제
 로직을 연결하려면 MOCK-0003의 연결 순서와 관련 ADR까지 읽는다. 정책 문서는 미디어, 출력,
@@ -39,6 +41,8 @@
 | 확정된 UI 기준선과 실제 로직 연결 순서는 무엇인가 | [MOCK-0003](mock/mock-0003-review-log.md) | [ADR-0002](decisions/adr-0002-command-based-edit-history.md) |
 | Python, PySide6, uv, FFmpeg와 런처를 왜 사용하는가 | [ADR-0001](decisions/adr-0001-python-uv-native-launcher.md) | [프로젝트 README](../README.md) |
 | 실행 취소·다시 실행을 위해 MVP부터 어떤 편집 구조를 사용하는가 | [ADR-0002](decisions/adr-0002-command-based-edit-history.md) | [PRODUCT-0002](product/product-0002-feature-inventory.md) |
+| 프로젝트 시간, 클립 모델과 파일 스키마는 어떻게 표현하는가 | [DESIGN-0003](design/design-0003-project-core-contract.md) | [ADR-0003](decisions/adr-0003-project-core-state-and-storage.md) |
+| 프로젝트 상태에 데이터베이스를 사용하는가 | [ADR-0003](decisions/adr-0003-project-core-state-and-storage.md) | [DESIGN-0003](design/design-0003-project-core-contract.md) |
 | 개발 및 실행 명령은 무엇인가 | [프로젝트 README](../README.md) | [스크립트 안내](../scripts/README.md) |
 | 출력 영상, FFmpeg, 코덱과 기본 자산의 권리 범위는 무엇인가 | [POLICY-0001](policies/policy-0001-licensing-and-output-rights.md) | [프로젝트 README](../README.md) |
 | 문서 파일의 이름과 위치를 어떻게 정하는가 | 이 문서 | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) |
@@ -59,6 +63,16 @@
 
 단계의 상세 작업과 완료 조건은 [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md)을
 기준으로 한다. 기준선을 변경하면 관련 문서, 목업과 검증 시나리오를 같은 변경에서 갱신한다.
+
+## 실제 로직 연결 현황
+
+| 작업 | 상태 | 구현 및 계약 |
+| --- | --- | --- |
+| `W-01` 프로젝트 코어 | 완료 | [DESIGN-0003](design/design-0003-project-core-contract.md), [프로젝트 코어 소스](../src/movie_maker/project/), [코어 테스트](../tests/project/) |
+| `W-02` 미디어 선택·분석·보관함 | 다음 작업 | [MOCK-0003 연결 순서](mock/mock-0003-review-log.md#실제-로직-연결-순서) |
+
+W-03 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순서와 검증 기준은 MOCK-0003을
+따른다.
 
 ## 카테고리와 파일명 규칙
 
@@ -100,11 +114,13 @@
 | `WORKFLOW-0001` | 승인됨 | [기능 정의 및 UI 목업 작업 방식](workflows/workflow-0001-feature-ui-mockup.md) |
 | `DESIGN-0001` | 승인됨 | [화면 목록과 레이아웃](design/design-0001-screen-layout.md) |
 | `DESIGN-0002` | 승인됨 | [화면 요소와 상세 기능](design/design-0002-element-functions.md) |
+| `DESIGN-0003` | 승인됨 | [프로젝트 코어 계약](design/design-0003-project-core-contract.md) |
 | `MOCK-0001` | 승인됨 | [목업 동작 및 상태 명세](mock/mock-0001-behavior-specification.md) |
 | `MOCK-0002` | 승인됨 | [인터랙티브 목업 검증 시나리오](mock/mock-0002-validation-scenarios.md) |
 | `MOCK-0003` | 승인됨 | [목업 검토 기록과 UI 기준선](mock/mock-0003-review-log.md) |
 | `ADR-0001` | 승인됨 | [Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) |
 | `ADR-0002` | 승인됨 | [명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) |
+| `ADR-0003` | 승인됨 | [프로젝트 코어 상태, 시간 단위와 저장 경계](decisions/adr-0003-project-core-state-and-storage.md) |
 | `POLICY-0001` | 초안 | [라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) |
 
 아키텍처 결정을 변경할 때 기존 ADR을 조용히 덮어쓰지 않는다. 새 ADR을 추가하고 이전 결정의
