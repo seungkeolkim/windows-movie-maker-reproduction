@@ -4,7 +4,7 @@
 
 이 프로젝트는 영상 편집을 처음 접하는 사람도 미디어를 불러오고, 필요한 부분만 남기고, 순서를 정하고, 음악과 자막을 더해 하나의 동영상으로 저장할 수 있게 만드는 것을 목표로 합니다. 전문 편집기의 복잡한 기능을 따라가기보다 **쉽게 배우고 빠르게 완성하는 경험**에 집중합니다.
 
-현재는 기획 단계이며 실행 가능한 프로그램은 아직 없습니다.
+현재는 실행 환경 스캐폴딩과 Qt GUI 확인 창까지 구현되어 있습니다. 영상 편집 기능은 아직 구현 전입니다.
 
 ## 왜 만드는가
 
@@ -115,20 +115,185 @@ Microsoft 커뮤니티의 버전별 설명에 따르면 기존 버전은 클립�
 - `pyproject.toml`: 애플리케이션 메타데이터와 직접 의존성
 - `uv.lock`: 전이 의존성을 포함한 정확한 패키지 조합
 
-정확한 Python 패치 버전은 PySide6와 미디어 의존성 호환성을 검증한 뒤 첫 스캐폴딩에서 고정합니다. 개발·실행 환경을 변경할 때는 `uv.lock`도 함께 갱신하고 검증합니다.
+초기 실행 기준은 uv가 관리하는 **CPython 3.13.14**와 **uv 0.12.1 이상**입니다. `--managed-python`을 사용하므로 컴퓨터에 기존 Python이나 Microsoft Store Python이 설치되어 있어도 사용하지 않습니다. 개발·실행 환경을 변경할 때는 `uv.lock`도 함께 갱신하고 검증합니다.
 
-계획된 기본 실행 명령은 다음과 같습니다. 아직 애플리케이션 스캐폴딩 전이므로 현재 저장소에서는 실행되지 않습니다.
+### 사전 요구 사항
 
-```powershell
-uv sync --locked --no-dev
-uv run --locked --no-dev -- movie-maker
+다음 항목만 사용자가 준비하면 됩니다.
+
+- 64비트 Windows 또는 64비트 Linux(`x86_64`, `aarch64`)
+- [`uv` 0.12.1 이상](https://docs.astral.sh/uv/getting-started/installation/)
+- 최초 Python 및 패키지 다운로드를 위한 인터넷 연결
+- 동일한 배포본에서 가져온 FFmpeg와 ffprobe
+- Linux에서는 Qt GUI 실행에 필요한 X11/Wayland, OpenGL/EGL, XKB/XCB, 글꼴, DBus 및 오디오 런타임 라이브러리
+
+Python, Qt SDK, PySide6 또는 가상환경을 별도로 설치하거나 활성화할 필요는 없습니다. 설정 스크립트가 고정된 CPython을 uv 관리 영역에 설치하고 저장소의 `.venv`를 구성합니다. Linux 배포판이 제공하는 GUI·오디오 시스템 라이브러리는 uv의 관리 대상이 아니므로 별도로 준비해야 합니다.
+
+현재 PySide6 Linux 휠을 기준으로 `x86_64`는 glibc 2.34 이상, `aarch64`는 glibc 2.39 이상인 배포판을 권장합니다. 더 오래된 배포판은 잠금 파일의 바이너리 패키지를 설치하지 못할 수 있습니다.
+
+### FFmpeg 설치
+
+FFmpeg는 Python 패키지가 아니며 uv가 설치하지 않습니다. H.264와 AAC를 지원하는 빌드의 FFmpeg와 ffprobe를 함께 설치해야 합니다.
+
+Windows에서는 [FFmpeg의 Windows 다운로드 안내](https://ffmpeg.org/download.html#build-windows)에 연결된 64비트 빌드를 내려받아 압축을 풉니다. Linux에서는 배포판 패키지 관리자를 사용할 수 있습니다.
+
+```bash
+# Debian/Ubuntu
+sudo apt update
+sudo apt install ffmpeg
+
+# Arch Linux
+sudo pacman -S ffmpeg
 ```
 
-별도의 작은 Windows 네이티브 실행기 `MovieMakerLauncher.exe`도 제공합니다. 런처는 Python을 내장하지 않고 `uv` 설치 여부, 고정 Python 버전, `.venv`, FFmpeg를 점검한 뒤 같은 실행 명령을 호출합니다. 일반 옵션은 체크박스나 선택 항목으로 제공하고, 고급 사용자는 추가 인자를 전달할 수 있게 합니다.
+Fedora 계열은 FFmpeg 패키지를 제공하는 저장소를 먼저 활성화해야 할 수 있습니다. 어느 운영체제에서든 두 실행 파일은 같은 배포본과 `bin` 디렉터리에서 가져와야 합니다.
+
+설정·실행 스크립트는 다음 순서로 FFmpeg를 찾습니다.
+
+1. Windows의 `-FFmpegDirectory` 또는 Linux의 `--ffmpeg-dir`로 전달한 디렉터리
+2. `MOVIE_MAKER_FFMPEG_DIR` 환경 변수
+3. 저장소의 `tools/ffmpeg/bin` 디렉터리
+4. 현재 `PATH`
+
+예를 들어 FFmpeg 경로를 점검 스크립트에 직접 전달할 수 있습니다.
+
+```powershell
+.\scripts\environment\check-prerequisites.ps1 `
+  -FFmpegDirectory "C:\Tools\ffmpeg\bin"
+```
+
+```bash
+bash ./scripts/environment/check-prerequisites.sh \
+  --ffmpeg-dir /opt/ffmpeg/bin
+```
+
+`tools\`는 Git에서 제외되므로 개인 개발 환경에서만 FFmpeg를 저장소 아래에 둘 수도 있습니다. 프로젝트는 FFmpeg를 자동 다운로드하거나 시스템 `PATH`를 수정하지 않습니다.
+
+점검 스크립트는 FFmpeg 실행 여부뿐 아니라 H.264/AAC 인코더와 트리밍, 합성, 크기 조절, 오디오 믹싱 및 텍스트 출력에 필요한 필터도 확인합니다. 배포할 FFmpeg 빌드와 라이선스 정책은 별도로 확정해야 합니다.
+
+### 실행 환경 구성
+
+#### Windows
+
+저장소 루트의 PowerShell에서 다음을 실행합니다. 실행 정책이 로컬 스크립트를 차단하는 컴퓨터에서도 현재 프로세스에 한해 실행할 수 있는 명령입니다.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\environment\setup.ps1 `
+  -FFmpegDirectory "C:\Tools\ffmpeg\bin"
+```
+
+테스트·린트 도구까지 필요한 개발 환경은 `-Dev`를 추가합니다.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\environment\setup.ps1 `
+  -Dev `
+  -FFmpegDirectory "C:\Tools\ffmpeg\bin"
+```
+
+#### Linux
+
+Debian/Ubuntu의 일반적인 Qt GUI 런타임 의존성은 다음과 같이 준비할 수 있습니다. 배포판 버전에 따라 패키지 이름이 다를 수 있으며, Wayland 또는 다른 데스크톱 환경은 대응 패키지가 추가로 필요할 수 있습니다.
+
+```bash
+sudo apt update
+sudo apt install \
+  ffmpeg libdbus-1-3 libegl1 libfontconfig1 libgl1 libglib2.0-0 libpulse0 \
+  libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+  libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+  libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0
+```
+
+FFmpeg가 `PATH`에 있다면 별도 인자 없이 설정할 수 있습니다.
+
+```bash
+bash ./scripts/environment/setup.sh
+```
+
+사용자 지정 FFmpeg와 개발 의존성을 함께 사용하려면 다음과 같이 실행합니다.
+
+```bash
+bash ./scripts/environment/setup.sh \
+  --dev \
+  --ffmpeg-dir /opt/ffmpeg/bin
+```
+
+#### 공통 동작
+
+스크립트는 다음 작업을 순서대로 수행합니다.
+
+1. 운영체제와 CPU 아키텍처, uv, FFmpeg 및 ffprobe를 검사합니다.
+2. uv 관리형 CPython 3.13.14를 설치하거나 검증합니다.
+3. `uv.lock` 그대로 프로젝트 전용 `.venv`를 구성합니다.
+4. PySide6와 Qt Multimedia/SVG 플러그인을 실제로 불러옵니다.
+5. 설치된 런타임 버전을 출력합니다.
+
+의존성을 바꾼 개발자만 `uv lock`으로 잠금 파일을 갱신합니다. 일반 사용자와 CI는 항상 기존 `uv.lock`을 사용해야 합니다.
+
+### 애플리케이션 실행
+
+환경 구성이 끝난 뒤 다음 명령으로 실행합니다.
+
+```powershell
+.\scripts\environment\run.ps1 -FFmpegDirectory "C:\Tools\ffmpeg\bin"
+```
+
+```bash
+bash ./scripts/environment/run.sh
+```
+
+현재는 GUI 런타임이 정상인지 확인하는 창이 열리며 영상 편집 UI는 아직 없습니다. 버전과 DLL 로딩만 확인하고 창을 열지 않으려면 다음을 실행합니다.
+
+```powershell
+.\scripts\environment\run.ps1 `
+  -FFmpegDirectory "C:\Tools\ffmpeg\bin" `
+  -- --check
+```
+
+```bash
+bash ./scripts/environment/run.sh -- --check
+```
+
+스크립트를 거치지 않는 대응 명령은 다음과 같습니다. 먼저 FFmpeg가 `PATH` 또는 `MOVIE_MAKER_FFMPEG_DIR`에서 발견되어야 합니다.
+
+```powershell
+uv --managed-python python install 3.13.14
+uv --managed-python sync --locked --no-dev
+uv --managed-python run --locked --no-sync -- movie-maker
+```
+
+`--locked`는 실행 중 잠금 파일이 변경되는 것을 막고, `--no-sync`는 실행 시 암묵적으로 패키지를 설치하거나 제거하지 않게 합니다. `.venv`가 없거나 의존성이 맞지 않으면 운영체제에 맞는 `setup.ps1` 또는 `setup.sh`를 다시 사용합니다.
+
+### 개발 검사
+
+`setup.ps1 -Dev` 또는 `setup.sh --dev`를 실행한 환경에서 다음 검사를 사용할 수 있습니다.
+
+```powershell
+uv --managed-python run --locked --no-sync -- pytest
+uv --managed-python run --locked --no-sync -- ruff check .
+uv --managed-python run --locked --no-sync -- mypy
+git diff --check
+```
+
+GUI 테스트는 `pytest-qt`와 PySide6를 사용하도록 `pyproject.toml`에 고정되어 있습니다.
+
+### 문제 해결
+
+- `uv`가 CPython 3.13.14를 찾지 못하면 `uv self update` 또는 uv를 설치한 패키지 관리자의 업데이트 명령을 실행합니다.
+- `DLL load failed`가 발생하면 Windows Update를 적용하고 [Microsoft Visual C++ 재배포 가능 패키지 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)를 설치한 뒤 다시 시도합니다.
+- Qt 플랫폼 플러그인 오류가 발생하면 외부 프로그램이 설정한 `QT_PLUGIN_PATH`나 `PYTHONPATH`를 제거한 새 PowerShell에서 실행합니다.
+- Linux에서 `xcb` 또는 OpenGL 플러그인 오류가 발생하면 위의 GUI 런타임 패키지와 그래픽 드라이버가 설치됐는지 확인합니다. 디스플레이 서버가 없는 SSH·CI 세션에서는 일반 GUI 창을 열 수 없습니다.
+- `.venv`가 손상된 경우 생성물인 `.venv`를 이름 변경하거나 제거한 뒤 운영체제에 맞는 설정 스크립트를 다시 실행합니다. uv 관리형 Python과 패키지 캐시는 재사용됩니다.
+- FFmpeg 검사에서 실패하면 FFmpeg와 ffprobe 실행 파일이 같은 배포본인지, 필수 인코더와 필터가 포함된 완전한 빌드인지 확인합니다.
+
+별도의 작은 Windows 네이티브 실행기 `MovieMakerLauncher.exe`는 향후 제공합니다. 런처는 Python을 내장하지 않고 `uv` 설치 여부, 고정 Python 버전, `.venv`, FFmpeg를 점검한 뒤 같은 실행 명령을 호출합니다. 일반 옵션은 체크박스나 선택 항목으로 제공하고, 고급 사용자는 추가 인자를 전달할 수 있게 합니다.
+
+다음은 런처와 온라인 기능이 구현된 뒤 사용할 예정인 인자 전달 규약이며 현재 앱에서는 아직 동작하지 않습니다.
 
 ```powershell
 MovieMakerLauncher.exe -- --online
-uv run --locked --no-dev -- movie-maker --online
+uv --managed-python run --locked --no-sync -- movie-maker --online
 ```
 
 첫 번째 `--` 뒤의 인자는 Python 애플리케이션에 그대로 전달합니다. `--online`은 앱 동작 모드이며 의존성 설치 여부를 뜻하지 않습니다. Python, `.venv`, FFmpeg 경로는 시스템 `PATH`에 추가하지 않습니다. 터미널 실행이 필요한 사용자를 위해 런처 디렉터리만 선택적으로 사용자 `PATH`에 등록할 수 있습니다.
@@ -142,7 +307,7 @@ uv run --locked --no-dev -- movie-maker --online
 ### 0단계 — 제품 정의와 기술 검증
 
 - [x] Python, PySide6, uv 및 네이티브 런처를 기본 기술 구성으로 결정
-- [ ] 정확한 CPython 패치 버전과 최소 지원 uv 버전 확정
+- [x] 정확한 CPython 패치 버전과 최소 지원 uv 버전 확정
 - [ ] 런처에서 환경 점검과 애플리케이션 인자 전달 검증
 - [ ] 디코딩·인코딩 엔진과 라이선스 검토
 - [ ] 대표 입력 파일(H.264, HEVC, 가변 프레임률, MP3, WAV, JPEG, PNG) 호환성 실험
@@ -236,12 +401,13 @@ uv run --locked --no-dev -- movie-maker --online
 | --- | --- |
 | 제품 목표 및 초기 범위 | 문서화됨 |
 | 기술 스택 | Python + PySide6 + uv + FFmpeg로 결정 |
-| 실행/배포 방식 | uv 환경 + 선택적 네이티브 런처로 결정 |
-| UI 프로토타입 | 시작 전 |
+| 실행 환경 | uv 관리형 Python, 잠금 파일, 설정·점검·실행 스크립트 구현 |
+| 실행/배포 방식 | uv 환경 구현, 선택적 네이티브 런처는 설계 완료 |
+| UI 프로토타입 | Qt 환경 확인용 창만 구현 |
 | 편집/렌더링 엔진 | 시작 전 |
 | 첫 사용 가능 버전 | 미배포 |
 
-구현이 시작되면 이 문서에 개발 환경 구성, 빌드, 테스트, 기여 방법을 추가합니다. 완료되지 않은 기능은 README에서 지원한다고 표시하지 않습니다.
+완료되지 않은 편집 기능은 README에서 지원한다고 표시하지 않습니다.
 
 ## 이름과 권리
 

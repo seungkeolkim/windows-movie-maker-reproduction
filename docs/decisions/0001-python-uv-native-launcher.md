@@ -21,7 +21,7 @@ Python 런타임과 모든 의존성을 저장소 또는 portable 배포본에 �
 7. 개발자와 사용자가 실행할 수 있는 명령행 경로를 항상 유지한다.
 8. 별도의 작은 Windows 네이티브 GUI 런처를 제공하되, 런처는 Python 런타임을 포함하거나 애플리케이션 로직을 구현하지 않는다.
 
-정확한 CPython 패치 버전과 최소 지원 uv 버전은 PySide6 및 미디어 관련 패키지의 호환성 검증 후 첫 프로젝트 스캐폴딩에서 확정한다. 버전을 정하기 전까지 임의 값을 문서나 런처에 하드코딩하지 않는다.
+첫 프로젝트 스캐폴딩에서 CPython 3.13.14와 uv 0.12.1 이상을 초기 실행 기준으로 확정했다. 환경 구성과 실행 명령은 `--managed-python`을 사용하여 기존 시스템 Python 대신 uv 관리형 Python을 강제한다. 버전을 변경할 때는 PySide6와 미디어 의존성을 다시 검증하고 `.python-version`, `pyproject.toml`, `uv.lock`, 설정 스크립트와 사용자 문서를 함께 갱신한다.
 
 ## 저장소의 예정 구조
 
@@ -39,6 +39,11 @@ Python 런타임과 모든 의존성을 저장소 또는 portable 배포본에 �
 │     └─ project/
 ├─ launcher/
 │  └─ Windows 네이티브 런처 소스
+├─ scripts/
+│  └─ environment/
+│     ├─ check-prerequisites.ps1 / .sh
+│     ├─ setup.ps1 / .sh
+│     └─ run.ps1 / .sh
 ├─ tests/
 └─ docs/
 ```
@@ -48,16 +53,19 @@ Python 런타임과 모든 의존성을 저장소 또는 portable 배포본에 �
 처음 환경을 구성하거나 의존성 정의가 변경됐을 때 다음을 실행한다.
 
 ```powershell
-uv sync --locked --no-dev
+uv --managed-python python install 3.13.14
+uv --managed-python sync --locked --no-dev
 ```
 
 애플리케이션은 프로젝트가 제공할 `movie-maker` 엔트리 포인트로 실행한다.
 
 ```powershell
-uv run --locked --no-dev -- movie-maker
+uv --managed-python run --locked --no-sync -- movie-maker
 ```
 
-`--locked`는 실행 중 `uv.lock`이 변경되지 않아야 한다는 계약이다. 개발자가 의존성을 의도적으로 변경할 때만 lockfile을 다시 생성하고 테스트한다. 가상환경을 수동으로 활성화하는 절차는 표준 실행 방법으로 사용하지 않는다.
+`--managed-python`은 시스템에 기존 Python이 있더라도 uv가 설치한 고정 버전을 사용하게 한다. `--locked`는 실행 중 `uv.lock`이 변경되지 않아야 한다는 계약이고, `--no-sync`는 준비된 환경으로 실행할 때 암묵적인 패키지 변경을 막는다. 개발자가 의존성을 의도적으로 변경할 때만 lockfile을 다시 생성하고 테스트한다. 가상환경을 수동으로 활성화하는 절차는 표준 실행 방법으로 사용하지 않는다.
+
+Windows에서는 `scripts/environment/*.ps1`, Linux에서는 대응하는 `scripts/environment/*.sh`를 사용한다. 두 스크립트 세트는 같은 Python 버전, 잠금 파일, FFmpeg 검사 항목과 앱 인자 전달 규약을 유지한다. Windows 전용 네이티브 런처는 이 교차 플랫폼 명령행 경로와 별개로 제공한다.
 
 ## 런처의 책임
 
@@ -66,9 +74,9 @@ uv run --locked --no-dev -- movie-maker
 1. 런처 자신의 위치를 기준으로 프로젝트 루트를 찾는다.
 2. `uv`가 실행 가능한지 확인하고, 없으면 설치 안내를 표시한다.
 3. `.python-version`, `pyproject.toml`, `uv.lock`의 존재를 확인한다.
-4. `.venv`가 없거나 환경 명세가 변경되었으면 사용자의 동의를 받아 `uv sync --locked --no-dev`를 실행한다.
+4. `.venv`가 없거나 환경 명세가 변경되었으면 사용자의 동의를 받아 `uv --managed-python sync --locked --no-dev`를 실행한다.
 5. FFmpeg와 ffprobe의 위치 및 실행 가능 여부를 점검한다.
-6. 환경이 준비되면 `uv run --locked --no-dev -- movie-maker`를 실행한다.
+6. 환경이 준비되면 `uv --managed-python run --locked --no-sync -- movie-maker`를 실행한다.
 7. 표준 오류, 종료 코드와 진단 정보를 로그에 남긴다.
 
 일반 실행 시 런처는 다음 상태를 명확히 구분한다.
@@ -96,7 +104,7 @@ MovieMakerLauncher.exe --verbose -- --online --project "C:\Videos\travel.wmmr"
 런처가 실행하는 대응 명령은 다음과 같다.
 
 ```powershell
-uv run --locked --no-dev -- movie-maker --online --project "C:\Videos\travel.wmmr"
+uv --managed-python run --locked --no-sync -- movie-maker --online --project "C:\Videos\travel.wmmr"
 ```
 
 구현 시 인자를 하나의 셸 문자열로 결합해 `cmd.exe`에 넘기지 않는다. Windows 프로세스 API를 사용하고 인자 경계와 따옴표를 보존하여 공백이 있는 경로와 임의 입력을 안전하게 처리한다.
