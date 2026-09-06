@@ -2,6 +2,16 @@
 
 이 디렉터리는 README의 요약보다 오래 유지되어야 하는 설계와 의사결정 기록을 보관합니다.
 
+## 작업 방식
+
+- [기능 정의 및 UI 목업 작업 방식](ui-mockup-workflow.md) — 기능 인벤토리부터 화면·동작
+  명세, 인터랙티브 목업 검토와 실제 로직 연결까지의 단계별 기준
+
+## 제품 및 UI 설계
+
+- [UI 설계 기준](product/ui-design-baseline.md) — 주요 사용자, 사용 환경, 제품 경험 원칙,
+  대표 시나리오와 MVP·1.0 범위 기준
+
 ## 아키텍처 결정 기록
 
 - [ADR-0001 — Python, uv 및 네이티브 런처](decisions/0001-python-uv-native-launcher.md)
