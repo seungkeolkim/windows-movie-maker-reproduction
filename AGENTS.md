@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository has an executable Python/Qt environment scaffold; video editing features remain in the design phase. `README.md` defines the product scope, roadmap, setup, and quality goals. `docs/README.md` indexes detailed documentation, while `docs/decisions/` contains numbered Architecture Decision Records (ADRs), such as `0001-python-uv-native-launcher.md`.
+This repository has an executable Python/Qt environment scaffold; video editing features remain in the design phase. `README.md` defines the product scope, roadmap, setup, and quality goals. `docs/README.md` defines the documentation map and reading order, while `docs/decisions/` contains numbered Architecture Decision Records (ADRs), such as `adr-0001-python-uv-native-launcher.md`.
 
 Python application code lives in `src/movie_maker/`, Windows and Linux environment helpers in `scripts/environment/`, and automated tests in `tests/`. Keep future script families in purpose-specific subdirectories instead of mixing them in `scripts/`. Add feature packages such as `ui/`, `timeline/`, `media/`, and `project/` as implementation progresses; reserve `launcher/` for the native Windows launcher. Keep new documentation close to its subject and add architectural decisions as sequentially numbered ADRs.
 

@@ -1,8 +1,11 @@
 # UI 설계 기준
 
+- 문서 번호: `PRODUCT-0001`
 - 상태: 초안 — 범위 기준 검토 필요
 - 단계: 기능 정의 및 UI 목업 작업 방식의 0단계
 - 기준일: 2026-09-06
+- 관련 작업 방식:
+  [WORKFLOW-0001](../workflows/workflow-0001-feature-ui-mockup.md)
 
 ## 목적
 
