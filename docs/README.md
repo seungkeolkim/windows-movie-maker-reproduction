@@ -9,21 +9,26 @@
 | --- | --- | --- |
 | 1 | [프로젝트 README](../README.md) | 제품 목표, 현재 개발 상태, 실행 방법과 전체 로드맵 |
 | 2 | [PRODUCT-0001: UI 설계 기준](product/product-0001-ui-design-baseline.md) | 주요 사용자, 제품 원칙, 대표 시나리오와 MVP·1.0 경계 |
-| 3 | [WORKFLOW-0001: 기능 정의 및 UI 목업 작업 방식](workflows/workflow-0001-feature-ui-mockup.md) | 기능 목록부터 화면·동작 명세, 목업 검토와 실제 로직 연결까지의 절차 |
-| 4 | [ADR-0001: Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) | 현재 기술 스택과 실행 환경을 선택한 이유 및 제약 |
-| 5 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
+| 3 | [PRODUCT-0002: 제품 기능 인벤토리](product/product-0002-feature-inventory.md) | 전체 기능, 기능별 우선순위, 관련 시나리오와 주요 제약 |
+| 4 | [WORKFLOW-0001: 기능 정의 및 UI 목업 작업 방식](workflows/workflow-0001-feature-ui-mockup.md) | 기능 목록부터 화면·동작 명세, 목업 검토와 실제 로직 연결까지의 절차 |
+| 5 | [ADR-0001: Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) | 현재 기술 스택과 실행 환경을 선택한 이유 및 제약 |
+| 6 | [ADR-0002: 명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) | MVP 편집 명령 구조와 1.0 실행 취소·다시 실행의 기반 |
+| 7 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
 
-2번과 3번은 현재 UI 목업 설계에 참여할 때 필수다. ADR과 정책 문서는 해당 영역을
-변경하거나 구현할 때 읽고, 단순히 현재 제품 방향을 파악할 때는 필요 부분만 확인한다.
+PRODUCT 문서 두 개와 WORKFLOW-0001은 현재 UI 목업 설계에 참여할 때 필수다. ADR과 정책
+문서는 해당 영역을 변경하거나 구현할 때 읽고, 단순히 현재 제품 방향을 파악할 때는 필요
+부분만 확인한다.
 
 ## 목적별로 찾기
 
 | 알고 싶은 내용 또는 작업 | 먼저 볼 문서 | 함께 볼 문서 |
 | --- | --- | --- |
 | 프로젝트가 무엇이고 현재 어디까지 구현됐는가 | [프로젝트 README](../README.md) | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) |
-| 0단계에서 합의 중인 사용자·시나리오·범위는 무엇인가 | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) |
-| 기능 목록과 화면 목업을 어떤 순서로 만드는가 | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) |
+| 0단계에서 확정한 사용자·시나리오·범위는 무엇인가 | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) |
+| 어떤 기능을 언제 제공하며 주요 제약은 무엇인가 | [PRODUCT-0002](product/product-0002-feature-inventory.md) | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) |
+| 기능 목록과 화면 목업을 어떤 순서로 만드는가 | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) | [PRODUCT-0002](product/product-0002-feature-inventory.md) |
 | Python, PySide6, uv, FFmpeg와 런처를 왜 사용하는가 | [ADR-0001](decisions/adr-0001-python-uv-native-launcher.md) | [프로젝트 README](../README.md) |
+| 실행 취소·다시 실행을 위해 MVP부터 어떤 편집 구조를 사용하는가 | [ADR-0002](decisions/adr-0002-command-based-edit-history.md) | [PRODUCT-0002](product/product-0002-feature-inventory.md) |
 | 개발 및 실행 명령은 무엇인가 | [프로젝트 README](../README.md) | [스크립트 안내](../scripts/README.md) |
 | 출력 영상, FFmpeg, 코덱과 기본 자산의 권리 범위는 무엇인가 | [POLICY-0001](policies/policy-0001-licensing-and-output-rights.md) | [프로젝트 README](../README.md) |
 | 문서 파일의 이름과 위치를 어떻게 정하는가 | 이 문서 | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) |
@@ -36,7 +41,7 @@
 | 단계 | 산출물 | 상태 |
 | --- | --- | --- |
 | 0. 기준 정의 | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) | 승인됨, 완료 |
-| 1. 기능 인벤토리 | `product/product-0002-feature-inventory.md` | 예정 |
+| 1. 기능 인벤토리 | [PRODUCT-0002](product/product-0002-feature-inventory.md) | 승인됨, 완료 |
 | 2. 화면 및 레이아웃 | `design/design-0001-screen-layout.md` | 예정 |
 | 3. 요소별 상세 기능 | `design/design-0002-element-functions.md` | 예정 |
 | 4. 목업 동작 명세 | `mock/mock-0001-behavior-specification.md` | 예정 |
@@ -82,8 +87,10 @@
 | 번호 | 상태 | 문서 |
 | --- | --- | --- |
 | `PRODUCT-0001` | 승인됨 | [UI 설계 기준](product/product-0001-ui-design-baseline.md) |
+| `PRODUCT-0002` | 승인됨 | [제품 기능 인벤토리](product/product-0002-feature-inventory.md) |
 | `WORKFLOW-0001` | 승인됨 | [기능 정의 및 UI 목업 작업 방식](workflows/workflow-0001-feature-ui-mockup.md) |
 | `ADR-0001` | 승인됨 | [Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) |
+| `ADR-0002` | 승인됨 | [명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) |
 | `POLICY-0001` | 초안 | [라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) |
 
 아키텍처 결정을 변경할 때 기존 ADR을 조용히 덮어쓰지 않는다. 새 ADR을 추가하고 이전 결정의
