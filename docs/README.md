@@ -35,7 +35,7 @@
 
 | 단계 | 산출물 | 상태 |
 | --- | --- | --- |
-| 0. 기준 정의 | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) | 초안, 범위 기준 검토 필요 |
+| 0. 기준 정의 | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) | 승인됨, 완료 |
 | 1. 기능 인벤토리 | `product/product-0002-feature-inventory.md` | 예정 |
 | 2. 화면 및 레이아웃 | `design/design-0001-screen-layout.md` | 예정 |
 | 3. 요소별 상세 기능 | `design/design-0002-element-functions.md` | 예정 |
@@ -81,7 +81,7 @@
 
 | 번호 | 상태 | 문서 |
 | --- | --- | --- |
-| `PRODUCT-0001` | 초안 | [UI 설계 기준](product/product-0001-ui-design-baseline.md) |
+| `PRODUCT-0001` | 승인됨 | [UI 설계 기준](product/product-0001-ui-design-baseline.md) |
 | `WORKFLOW-0001` | 승인됨 | [기능 정의 및 UI 목업 작업 방식](workflows/workflow-0001-feature-ui-mockup.md) |
 | `ADR-0001` | 승인됨 | [Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) |
 | `POLICY-0001` | 초안 | [라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) |
