@@ -4,7 +4,9 @@
 
 이 프로젝트는 영상 편집을 처음 접하는 사람도 미디어를 불러오고, 필요한 부분만 남기고, 순서를 정하고, 음악과 자막을 더해 하나의 동영상으로 저장할 수 있게 만드는 것을 목표로 합니다. 전문 편집기의 복잡한 기능을 따라가기보다 **쉽게 배우고 빠르게 완성하는 경험**에 집중합니다.
 
-현재는 실행 환경 스캐폴딩과 Qt GUI 확인 창까지 구현되어 있습니다. 영상 편집 기능은 아직 구현 전입니다.
+현재는 실행 환경 스캐폴딩과 MVP·1.0 화면 계약을 검증하는 인터랙티브 Qt 목업까지 구현되어
+있습니다. 목업은 고정 샘플 상태만 바꾸며 실제 미디어 재생, 프로젝트 파일 저장과 MP4 출력
+로직은 아직 구현 전입니다.
 
 ## 문서 읽기 안내
 
@@ -17,6 +19,11 @@
   [PRODUCT-0002](docs/product/product-0002-feature-inventory.md)를 읽습니다.
 - 기능 정의부터 UI 목업 검토까지의 작업 절차를 이해하려면
   [WORKFLOW-0001](docs/workflows/workflow-0001-feature-ui-mockup.md)을 읽습니다.
+- 확정된 화면·요소·상태를 구현하려면 [DESIGN-0001](docs/design/design-0001-screen-layout.md),
+  [DESIGN-0002](docs/design/design-0002-element-functions.md),
+  [MOCK-0001](docs/mock/mock-0001-behavior-specification.md)을 순서대로 읽습니다.
+- 목업 검증과 실제 로직 연결 순서는 [MOCK-0002](docs/mock/mock-0002-validation-scenarios.md)와
+  [MOCK-0003](docs/mock/mock-0003-review-log.md)을 확인합니다.
 - 기술 결정이나 라이선스처럼 특정 주제가 필요하면 문서 안내의 목적별 탐색표에서 관련
   ADR 또는 정책 문서를 찾습니다.
 
@@ -275,7 +282,9 @@ bash ./scripts/environment/setup.sh \
 bash ./scripts/environment/run.sh
 ```
 
-현재는 GUI 런타임이 정상인지 확인하는 창이 열리며 영상 편집 UI는 아직 없습니다. 버전과 DLL 로딩만 확인하고 창을 열지 않으려면 다음을 실행합니다.
+현재는 고정 샘플 데이터로 가져오기, 타임라인 편집, 속성, 미리 보기, 저장과 출력 상태를
+시험하는 인터랙티브 목업이 열립니다. 실제 미디어나 파일은 변경하지 않습니다. 버전과 DLL
+로딩만 확인하고 창을 열지 않으려면 다음을 실행합니다.
 
 ```powershell
 .\scripts\environment\run.ps1 `
@@ -438,7 +447,7 @@ uv --managed-python run --locked --no-sync -- movie-maker --online
 | 기술 스택 | Python + PySide6 + uv + FFmpeg로 결정 |
 | 실행 환경 | uv 관리형 Python, 잠금 파일, 설정·점검·실행 스크립트 구현 |
 | 실행/배포 방식 | uv 환경 구현, 선택적 네이티브 런처는 설계 완료 |
-| UI 프로토타입 | Qt 환경 확인용 창만 구현 |
+| UI 프로토타입 | MVP·1.0 인터랙티브 목업과 검증 기준선 승인 |
 | 편집/렌더링 엔진 | 시작 전 |
 | 첫 사용 가능 버전 | 미배포 |
 

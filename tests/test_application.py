@@ -1,16 +1,20 @@
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QDockWidget
 
 from movie_maker.application import MainWindow, runtime_report
 
 
-def test_main_window_identifies_environment_shell(qtbot) -> None:
+def test_main_window_exposes_interactive_mock_workspace(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)
+    window.show()
 
-    assert window.windowTitle() == "Movie Maker Reproduction"
-    label = window.centralWidget()
-    assert isinstance(label, QLabel)
-    assert "실행 환경 준비" in label.text()
+    assert "Movie Maker Reproduction" in window.windowTitle()
+    assert "인터랙티브 목업" in window.windowTitle()
+    assert window.objectName() == "S-EDITOR"
+    assert window.minimumWidth() == 1024
+    assert window.minimumHeight() == 640
+    assert window.findChild(QDockWidget, "S-LIBRARY") is not None
+    assert window.findChild(QDockWidget, "S-INSPECTOR") is not None
 
 
 def test_runtime_report_contains_core_versions(qapp) -> None:

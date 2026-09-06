@@ -1,4 +1,4 @@
-"""Qt application bootstrap and the temporary environment smoke-test window."""
+"""Qt application bootstrap and runtime diagnostics."""
 
 from __future__ import annotations
 
@@ -9,29 +9,13 @@ from importlib.metadata import version
 import numpy
 import platformdirs
 import pydantic
-from PySide6.QtCore import QCoreApplication, QLibraryInfo, Qt, qVersion
+from PySide6.QtCore import QCoreApplication, QLibraryInfo, qVersion
 from PySide6.QtMultimedia import QMediaDevices
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QApplication, QLabel, QMainWindow
+from PySide6.QtWidgets import QApplication
 
 from movie_maker import __version__
-
-
-class MainWindow(QMainWindow):
-    """Minimal window proving that the packaged Qt runtime can start."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setWindowTitle("Movie Maker Reproduction")
-        self.resize(760, 420)
-
-        message = QLabel(
-            "실행 환경 준비가 완료되었습니다.\n\n"
-            "영상 편집 UI는 다음 개발 단계에서 이 창에 추가됩니다."
-        )
-        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        message.setWordWrap(True)
-        self.setCentralWidget(message)
+from movie_maker.ui.main_window import MainWindow
 
 
 def create_application(arguments: Sequence[str] | None = None) -> QApplication:
@@ -69,7 +53,7 @@ def runtime_report() -> list[str]:
 
 
 def run(*, check_only: bool = False) -> int:
-    """Run the environment check or show the temporary application window."""
+    """Run the environment check or show the interactive product mock-up."""
 
     app = create_application()
     if check_only:

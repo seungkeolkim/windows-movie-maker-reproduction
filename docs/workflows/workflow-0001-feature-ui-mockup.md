@@ -281,6 +281,7 @@ S-TIMELINE: 타임라인
 | `SC-` | 대표 사용자 시나리오 | `SC-MVP-01` 짧은 영상 완성 |
 | `F-` | 사용자 기능 | `F-EDIT-02` 클립 분할 |
 | `S-` | 화면 또는 주요 화면 영역 | `S-TIMELINE` 타임라인 |
+| `E-` | 화면 안의 조작 또는 표시 요소 | `E-PREVIEW-PLAY` 재생 버튼 |
 | `I-` | 사용자 상호작용 | `I-TIMELINE-SPLIT` 분할 명령 |
 | `M-` | 목업 상태 또는 결과 | `M-SPLIT-DISABLED` 분할 불가 상태 |
 
@@ -290,6 +291,8 @@ S-TIMELINE: 타임라인
 기능 F-EDIT-02
     ↓
 화면 S-TIMELINE
+    ↓
+요소 E-TIMELINE-SPLIT
     ↓
 동작 I-TIMELINE-SPLIT
     ↓

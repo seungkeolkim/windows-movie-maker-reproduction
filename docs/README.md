@@ -11,13 +11,18 @@
 | 2 | [PRODUCT-0001: UI 설계 기준](product/product-0001-ui-design-baseline.md) | 주요 사용자, 제품 원칙, 대표 시나리오와 MVP·1.0 경계 |
 | 3 | [PRODUCT-0002: 제품 기능 인벤토리](product/product-0002-feature-inventory.md) | 전체 기능, 기능별 우선순위, 관련 시나리오와 주요 제약 |
 | 4 | [WORKFLOW-0001: 기능 정의 및 UI 목업 작업 방식](workflows/workflow-0001-feature-ui-mockup.md) | 기능 목록부터 화면·동작 명세, 목업 검토와 실제 로직 연결까지의 절차 |
-| 5 | [ADR-0001: Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) | 현재 기술 스택과 실행 환경을 선택한 이유 및 제약 |
-| 6 | [ADR-0002: 명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) | MVP 편집 명령 구조와 1.0 실행 취소·다시 실행의 기반 |
-| 7 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
+| 5 | [DESIGN-0001: 화면 목록과 레이아웃](design/design-0001-screen-layout.md) | MVP·1.0 화면, 패널 관계와 반응형 배치 |
+| 6 | [DESIGN-0002: 화면 요소와 상세 기능](design/design-0002-element-functions.md) | 각 요소의 입력, 활성 조건, 결과와 단축키 |
+| 7 | [MOCK-0001: 목업 동작 및 상태 명세](mock/mock-0001-behavior-specification.md) | 샘플 데이터, 정상·빈·오류 상태와 전이 규칙 |
+| 8 | [MOCK-0002: 인터랙티브 목업 검증](mock/mock-0002-validation-scenarios.md) | 목업 실행법, MVP·1.0 검증 절차와 합격 기준 |
+| 9 | [MOCK-0003: 검토 기록과 UI 기준선](mock/mock-0003-review-log.md) | 승인된 기준선, 반영 이슈와 실제 로직 연결 순서 |
+| 10 | [ADR-0001: Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) | 현재 기술 스택과 실행 환경을 선택한 이유 및 제약 |
+| 11 | [ADR-0002: 명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) | MVP 편집 명령 구조와 1.0 실행 취소·다시 실행의 기반 |
+| 12 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
 
-PRODUCT 문서 두 개와 WORKFLOW-0001은 현재 UI 목업 설계에 참여할 때 필수다. ADR과 정책
-문서는 해당 영역을 변경하거나 구현할 때 읽고, 단순히 현재 제품 방향을 파악할 때는 필요
-부분만 확인한다.
+제품 방향만 파악할 때는 1~4번을 읽는다. 화면을 변경하려면 DESIGN과 MOCK 문서까지, 실제
+로직을 연결하려면 MOCK-0003의 연결 순서와 관련 ADR까지 읽는다. 정책 문서는 미디어, 출력,
+배포 또는 기본 자산을 구현할 때 확인한다.
 
 ## 목적별로 찾기
 
@@ -27,6 +32,11 @@ PRODUCT 문서 두 개와 WORKFLOW-0001은 현재 UI 목업 설계에 참여할 
 | 0단계에서 확정한 사용자·시나리오·범위는 무엇인가 | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) |
 | 어떤 기능을 언제 제공하며 주요 제약은 무엇인가 | [PRODUCT-0002](product/product-0002-feature-inventory.md) | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) |
 | 기능 목록과 화면 목업을 어떤 순서로 만드는가 | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) | [PRODUCT-0002](product/product-0002-feature-inventory.md) |
+| 어떤 화면과 패널이 필요하고 창 크기에 따라 어떻게 배치되는가 | [DESIGN-0001](design/design-0001-screen-layout.md) | [PRODUCT-0002](product/product-0002-feature-inventory.md) |
+| 버튼·필드·단축키의 조건과 결과는 무엇인가 | [DESIGN-0002](design/design-0002-element-functions.md) | [DESIGN-0001](design/design-0001-screen-layout.md) |
+| 목업의 샘플 데이터와 상태 전이 규칙은 무엇인가 | [MOCK-0001](mock/mock-0001-behavior-specification.md) | [DESIGN-0002](design/design-0002-element-functions.md) |
+| 목업을 어떻게 실행하고 어떤 순서로 검증하는가 | [MOCK-0002](mock/mock-0002-validation-scenarios.md) | [MOCK-0001](mock/mock-0001-behavior-specification.md) |
+| 확정된 UI 기준선과 실제 로직 연결 순서는 무엇인가 | [MOCK-0003](mock/mock-0003-review-log.md) | [ADR-0002](decisions/adr-0002-command-based-edit-history.md) |
 | Python, PySide6, uv, FFmpeg와 런처를 왜 사용하는가 | [ADR-0001](decisions/adr-0001-python-uv-native-launcher.md) | [프로젝트 README](../README.md) |
 | 실행 취소·다시 실행을 위해 MVP부터 어떤 편집 구조를 사용하는가 | [ADR-0002](decisions/adr-0002-command-based-edit-history.md) | [PRODUCT-0002](product/product-0002-feature-inventory.md) |
 | 개발 및 실행 명령은 무엇인가 | [프로젝트 README](../README.md) | [스크립트 안내](../scripts/README.md) |
@@ -35,21 +45,20 @@ PRODUCT 문서 두 개와 WORKFLOW-0001은 현재 UI 목업 설계에 참여할 
 
 ## 0~6단계 산출물 지도
 
-아래 표는 UI 목업 작업 단계와 현재 또는 예정된 문서 위치를 연결한다. `예정` 항목은 실제
-작업에 착수할 때 생성하며 빈 파일을 미리 만들지 않는다.
+아래 표는 UI 목업 작업 단계와 승인된 결과물을 연결한다.
 
 | 단계 | 산출물 | 상태 |
 | --- | --- | --- |
 | 0. 기준 정의 | [PRODUCT-0001](product/product-0001-ui-design-baseline.md) | 승인됨, 완료 |
 | 1. 기능 인벤토리 | [PRODUCT-0002](product/product-0002-feature-inventory.md) | 승인됨, 완료 |
-| 2. 화면 및 레이아웃 | `design/design-0001-screen-layout.md` | 예정 |
-| 3. 요소별 상세 기능 | `design/design-0002-element-functions.md` | 예정 |
-| 4. 목업 동작 명세 | `mock/mock-0001-behavior-specification.md` | 예정 |
-| 5. 인터랙티브 목업 | UI 소스와 `mock/mock-0002-validation-scenarios.md` | 예정 |
-| 6. 검토와 기준선 | `mock/mock-0003-review-log.md` | 예정 |
+| 2. 화면 및 레이아웃 | [DESIGN-0001](design/design-0001-screen-layout.md) | 승인됨, 완료 |
+| 3. 요소별 상세 기능 | [DESIGN-0002](design/design-0002-element-functions.md) | 승인됨, 완료 |
+| 4. 목업 동작 명세 | [MOCK-0001](mock/mock-0001-behavior-specification.md) | 승인됨, 완료 |
+| 5. 인터랙티브 목업 | [UI 소스](../src/movie_maker/ui/)와 [MOCK-0002](mock/mock-0002-validation-scenarios.md) | 승인됨, 완료 |
+| 6. 검토와 기준선 | [MOCK-0003](mock/mock-0003-review-log.md) | 승인됨, 완료 |
 
 단계의 상세 작업과 완료 조건은 [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md)을
-기준으로 한다. 예정 파일의 이름이나 분리 단위가 달라지면 이 표를 같은 변경에서 갱신한다.
+기준으로 한다. 기준선을 변경하면 관련 문서, 목업과 검증 시나리오를 같은 변경에서 갱신한다.
 
 ## 카테고리와 파일명 규칙
 
@@ -89,6 +98,11 @@ PRODUCT 문서 두 개와 WORKFLOW-0001은 현재 UI 목업 설계에 참여할 
 | `PRODUCT-0001` | 승인됨 | [UI 설계 기준](product/product-0001-ui-design-baseline.md) |
 | `PRODUCT-0002` | 승인됨 | [제품 기능 인벤토리](product/product-0002-feature-inventory.md) |
 | `WORKFLOW-0001` | 승인됨 | [기능 정의 및 UI 목업 작업 방식](workflows/workflow-0001-feature-ui-mockup.md) |
+| `DESIGN-0001` | 승인됨 | [화면 목록과 레이아웃](design/design-0001-screen-layout.md) |
+| `DESIGN-0002` | 승인됨 | [화면 요소와 상세 기능](design/design-0002-element-functions.md) |
+| `MOCK-0001` | 승인됨 | [목업 동작 및 상태 명세](mock/mock-0001-behavior-specification.md) |
+| `MOCK-0002` | 승인됨 | [인터랙티브 목업 검증 시나리오](mock/mock-0002-validation-scenarios.md) |
+| `MOCK-0003` | 승인됨 | [목업 검토 기록과 UI 기준선](mock/mock-0003-review-log.md) |
 | `ADR-0001` | 승인됨 | [Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) |
 | `ADR-0002` | 승인됨 | [명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) |
 | `POLICY-0001` | 초안 | [라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) |
