@@ -2,6 +2,8 @@ from decimal import Decimal
 from fractions import Fraction
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from movie_maker.project import FrameRate, ProjectTime, TimeRounding
 
@@ -54,3 +56,22 @@ def test_frame_rate_rejects_non_positive_values(numerator: int, denominator: int
 def test_time_conversion_rejects_unknown_rounding_policy() -> None:
     with pytest.raises(TypeError):
         ProjectTime.from_seconds(1, rounding="nearest")  # type: ignore[arg-type]
+
+
+@given(
+    numerator=st.integers(min_value=1, max_value=1_000_000_000_000),
+    denominator=st.integers(min_value=1, max_value=100_000),
+    frame_index=st.integers(min_value=0, max_value=10_000_000),
+)
+def test_frame_lookup_returns_the_last_frame_at_a_quantized_timestamp(
+    numerator: int,
+    denominator: int,
+    frame_index: int,
+) -> None:
+    rate = FrameRate(numerator, denominator)
+    timestamp = rate.time_at_frame(frame_index)
+    located = rate.frame_at_or_before(timestamp)
+
+    assert located >= frame_index
+    assert rate.time_at_frame(located) <= timestamp
+    assert rate.time_at_frame(located + 1) > timestamp

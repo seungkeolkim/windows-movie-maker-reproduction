@@ -174,6 +174,17 @@ def test_visual_clip_insert_and_remove_reflow_following_clips() -> None:
     )
 
 
+def test_multiple_history_steps_round_trip_in_order() -> None:
+    initial = Project.empty(project_id="project-1")
+    executor = CommandExecutor(initial)
+    states = [initial]
+    for name in ("첫 이름", "두 번째 이름", "마지막 이름"):
+        states.append(executor.execute(RenameProject(name)))
+
+    assert [executor.undo() for _ in range(3)] == list(reversed(states[:-1]))
+    assert [executor.redo() for _ in range(3)] == states[1:]
+
+
 def test_absolute_track_insertion_uses_timeline_order_without_ripple() -> None:
     executor = CommandExecutor(Project.empty(project_id="project-1"))
     executor.execute(InsertMediaReference(_audio()))

@@ -150,11 +150,9 @@ class FrameRate:
 
         if time.nanoseconds < 0:
             raise ValueError("Frame lookup requires a non-negative project time.")
-        frames = time.to_fractional_seconds() * self.frames_per_second
-        candidate = frames.numerator // frames.denominator
-
-        while candidate > 0 and self.time_at_frame(candidate) > time:
-            candidate -= 1
-        while self.time_at_frame(candidate + 1) <= time:
-            candidate += 1
-        return candidate
+        # For non-negative values, round-half-away maps an exact tick value x to at most t
+        # precisely when x < t + 1/2. The strict integer form avoids a correction loop even
+        # for rates where several frames quantize to the same nanosecond.
+        upper_bound = (2 * time.nanoseconds + 1) * self.numerator
+        tick_denominator = 2 * self.denominator * NANOSECONDS_PER_SECOND
+        return (upper_bound - 1) // tick_denominator

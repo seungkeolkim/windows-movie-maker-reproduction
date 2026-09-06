@@ -141,12 +141,11 @@ class InsertMediaReference:
         canvas = project.canvas
         if type(self.restore_canvas_reference) is not bool:
             raise CommandRejected("restore_canvas_reference must be a boolean.")
-        if self.restore_canvas_reference:
-            if canvas.reference_asset_id is not None:
-                raise CommandRejected("The project canvas already has reference media.")
-            canvas = replace(canvas, reference_asset_id=self.media.asset_id)
-
         try:
+            if self.restore_canvas_reference:
+                if canvas.reference_asset_id is not None:
+                    raise CommandRejected("The project canvas already has reference media.")
+                canvas = replace(canvas, reference_asset_id=self.media.asset_id)
             next_project = replace(project, media=media, canvas=canvas)
         except ProjectValidationError as error:
             raise CommandRejected(str(error)) from error
