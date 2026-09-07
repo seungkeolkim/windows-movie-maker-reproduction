@@ -20,7 +20,8 @@
 | 11 | [ADR-0002: 명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) | MVP 편집 명령 구조와 1.0 실행 취소·다시 실행의 기반 |
 | 12 | [ADR-0003: 프로젝트 코어 상태, 시간 단위와 저장 경계](decisions/adr-0003-project-core-state-and-storage.md) | W-01 시간·불변 모델·명령 원자성과 DB 미사용 결정 |
 | 13 | [DESIGN-0003: 프로젝트 코어 계약](design/design-0003-project-core-contract.md) | 프로젝트 스키마 초안, 모델 불변식과 명령 프로토콜 |
-| 14 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
+| 14 | [DESIGN-0004: 실제 미디어 분석과 보관함 계약](design/design-0004-media-library-contract.md) | W-02 ffprobe 분석, 부분 성공, 중복·썸네일·제거 안전 경계 |
+| 15 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
 
 제품 방향만 파악할 때는 1~4번을 읽는다. 화면을 변경하려면 DESIGN과 MOCK 문서까지, 실제
 로직을 연결하려면 MOCK-0003의 연결 순서와 관련 ADR까지 읽는다. 정책 문서는 미디어, 출력,
@@ -43,6 +44,7 @@
 | 실행 취소·다시 실행을 위해 MVP부터 어떤 편집 구조를 사용하는가 | [ADR-0002](decisions/adr-0002-command-based-edit-history.md) | [PRODUCT-0002](product/product-0002-feature-inventory.md) |
 | 프로젝트 시간, 클립 모델과 파일 스키마는 어떻게 표현하는가 | [DESIGN-0003](design/design-0003-project-core-contract.md) | [ADR-0003](decisions/adr-0003-project-core-state-and-storage.md) |
 | 프로젝트 상태에 데이터베이스를 사용하는가 | [ADR-0003](decisions/adr-0003-project-core-state-and-storage.md) | [DESIGN-0003](design/design-0003-project-core-contract.md) |
+| 실제 미디어를 어떻게 분석하고 안전하게 보관함에 추가하는가 | [DESIGN-0004](design/design-0004-media-library-contract.md) | [DESIGN-0003](design/design-0003-project-core-contract.md) |
 | 개발 및 실행 명령은 무엇인가 | [프로젝트 README](../README.md) | [스크립트 안내](../scripts/README.md) |
 | 출력 영상, FFmpeg, 코덱과 기본 자산의 권리 범위는 무엇인가 | [POLICY-0001](policies/policy-0001-licensing-and-output-rights.md) | [프로젝트 README](../README.md) |
 | 문서 파일의 이름과 위치를 어떻게 정하는가 | 이 문서 | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) |
@@ -69,10 +71,11 @@
 | 작업 | 상태 | 구현 및 계약 |
 | --- | --- | --- |
 | `W-01` 프로젝트 코어 | 완료 | [DESIGN-0003](design/design-0003-project-core-contract.md), [프로젝트 코어 소스](../src/movie_maker/project/), [코어 테스트](../tests/project/) |
-| `W-02` 미디어 선택·분석·보관함 | 다음 작업 | [MOCK-0003 연결 순서](mock/mock-0003-review-log.md#실제-로직-연결-순서) |
+| `W-02` 미디어 선택·분석·보관함 | 완료 | [DESIGN-0004](design/design-0004-media-library-contract.md), [미디어 소스](../src/movie_maker/media/), [미디어 테스트](../tests/media/) |
+| `W-03` 프로젝트 새로 만들기·저장·열기 | 다음 작업 | [MOCK-0003 연결 순서](mock/mock-0003-review-log.md#실제-로직-연결-순서) |
 
 W-03 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순서와 검증 기준은 MOCK-0003을
-따른다.
+따른다. W-02는 DB 없이 W-01 프로젝트와 세션 메모리 썸네일 캐시를 사용한다.
 
 ## 카테고리와 파일명 규칙
 
@@ -115,6 +118,7 @@ W-03 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순�
 | `DESIGN-0001` | 승인됨 | [화면 목록과 레이아웃](design/design-0001-screen-layout.md) |
 | `DESIGN-0002` | 승인됨 | [화면 요소와 상세 기능](design/design-0002-element-functions.md) |
 | `DESIGN-0003` | 승인됨 | [프로젝트 코어 계약](design/design-0003-project-core-contract.md) |
+| `DESIGN-0004` | 승인됨 | [실제 미디어 분석과 보관함 계약](design/design-0004-media-library-contract.md) |
 | `MOCK-0001` | 승인됨 | [목업 동작 및 상태 명세](mock/mock-0001-behavior-specification.md) |
 | `MOCK-0002` | 승인됨 | [인터랙티브 목업 검증 시나리오](mock/mock-0002-validation-scenarios.md) |
 | `MOCK-0003` | 승인됨 | [목업 검토 기록과 UI 기준선](mock/mock-0003-review-log.md) |

@@ -8,7 +8,7 @@ from fractions import Fraction
 from math import gcd
 from typing import Self
 
-from movie_maker.project.time import ProjectTime
+from movie_maker.project.time import FrameRate, ProjectTime
 
 CURRENT_PROJECT_SCHEMA_VERSION = 1
 
@@ -22,6 +22,13 @@ class MediaKind(str, Enum):
 
     VIDEO = "video"
     PHOTO = "photo"
+    AUDIO = "audio"
+
+
+class MediaStreamKind(str, Enum):
+    """Codec-level stream categories retained from source media."""
+
+    VIDEO = "video"
     AUDIO = "audio"
 
 
@@ -89,6 +96,73 @@ ZERO_TIME = ProjectTime.zero()
 
 
 @dataclass(frozen=True, slots=True)
+class MediaTimeBase:
+    """The exact number of seconds represented by one source timestamp unit."""
+
+    numerator: int
+    denominator: int
+
+    def __post_init__(self) -> None:
+        if type(self.numerator) is not int or type(self.denominator) is not int:
+            raise TypeError("Media-time-base numerator and denominator must be integers.")
+        if self.numerator <= 0 or self.denominator <= 0:
+            raise ProjectValidationError("Media time base must be positive.")
+
+        divisor = gcd(self.numerator, self.denominator)
+        object.__setattr__(self, "numerator", self.numerator // divisor)
+        object.__setattr__(self, "denominator", self.denominator // divisor)
+
+    @property
+    def seconds_per_tick(self) -> Fraction:
+        """Return the exact duration of one source timestamp unit."""
+
+        return Fraction(self.numerator, self.denominator)
+
+
+@dataclass(frozen=True, slots=True)
+class MediaStream:
+    """Persistent timing metadata for one ffprobe video or audio stream."""
+
+    index: int
+    kind: MediaStreamKind
+    codec_name: str
+    time_base: MediaTimeBase
+    start_pts: int | None = None
+    duration_ts: int | None = None
+    average_frame_rate: FrameRate | None = None
+    sample_rate: int | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.index) is not int or self.index < 0:
+            raise ProjectValidationError("Media stream index must be a non-negative integer.")
+        if not isinstance(self.kind, MediaStreamKind):
+            raise ProjectValidationError("Media stream kind must be a MediaStreamKind value.")
+        _require_text(self.codec_name, "codec_name")
+        if not isinstance(self.time_base, MediaTimeBase):
+            raise ProjectValidationError("Media stream time_base must be a MediaTimeBase value.")
+        if self.start_pts is not None and type(self.start_pts) is not int:
+            raise ProjectValidationError("Media stream start_pts must be an integer when present.")
+        if self.duration_ts is not None and (
+            type(self.duration_ts) is not int or self.duration_ts <= 0
+        ):
+            raise ProjectValidationError("Media stream duration_ts must be positive when present.")
+        if self.average_frame_rate is not None and not isinstance(
+            self.average_frame_rate, FrameRate
+        ):
+            raise ProjectValidationError(
+                "Media stream average_frame_rate must be a FrameRate when present."
+            )
+        if self.sample_rate is not None and (
+            type(self.sample_rate) is not int or self.sample_rate <= 0
+        ):
+            raise ProjectValidationError("Media stream sample_rate must be positive when present.")
+        if self.kind is MediaStreamKind.VIDEO and self.sample_rate is not None:
+            raise ProjectValidationError("Video streams cannot define an audio sample rate.")
+        if self.kind is MediaStreamKind.AUDIO and self.average_frame_rate is not None:
+            raise ProjectValidationError("Audio streams cannot define a video frame rate.")
+
+
+@dataclass(frozen=True, slots=True)
 class MediaReference:
     """A non-owning reference to source media and its core metadata."""
 
@@ -99,6 +173,8 @@ class MediaReference:
     duration: ProjectTime | None
     width: int | None = None
     height: int | None = None
+    primary_stream_index: int | None = None
+    streams: tuple[MediaStream, ...] = ()
 
     def __post_init__(self) -> None:
         _require_text(self.asset_id, "asset_id")
@@ -123,6 +199,38 @@ class MediaReference:
             raise ProjectValidationError("Video and audio media require a known duration.")
         if self.kind is MediaKind.PHOTO and self.duration is not None:
             raise ProjectValidationError("Photo media has no intrinsic duration.")
+
+        if self.primary_stream_index is not None and (
+            type(self.primary_stream_index) is not int or self.primary_stream_index < 0
+        ):
+            raise ProjectValidationError(
+                "primary_stream_index must be a non-negative integer when present."
+            )
+        if type(self.streams) is not tuple:
+            raise ProjectValidationError("Media streams must use an immutable tuple.")
+        if any(not isinstance(stream, MediaStream) for stream in self.streams):
+            raise ProjectValidationError("Media streams must contain MediaStream values.")
+        stream_indexes = {stream.index for stream in self.streams}
+        if len(stream_indexes) != len(self.streams):
+            raise ProjectValidationError("Media stream indexes must be unique within a source.")
+        if self.streams and self.primary_stream_index is None:
+            raise ProjectValidationError("Analyzed media requires a primary stream index.")
+        if not self.streams and self.primary_stream_index is not None:
+            raise ProjectValidationError("A primary stream index requires stream metadata.")
+        if self.primary_stream_index is not None:
+            primary = next(
+                (stream for stream in self.streams if stream.index == self.primary_stream_index),
+                None,
+            )
+            if primary is None:
+                raise ProjectValidationError("Primary stream index must identify a source stream.")
+            expected_kind = (
+                MediaStreamKind.AUDIO
+                if self.kind is MediaKind.AUDIO
+                else MediaStreamKind.VIDEO
+            )
+            if primary.kind is not expected_kind:
+                raise ProjectValidationError("Primary stream kind must match the media kind.")
 
 
 @dataclass(frozen=True, slots=True)

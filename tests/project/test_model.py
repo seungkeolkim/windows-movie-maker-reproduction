@@ -5,8 +5,12 @@ import pytest
 from movie_maker.project import (
     Canvas,
     Clip,
+    FrameRate,
     MediaKind,
     MediaReference,
+    MediaStream,
+    MediaStreamKind,
+    MediaTimeBase,
     PlaybackRate,
     Project,
     ProjectTime,
@@ -153,3 +157,31 @@ def test_media_and_canvas_validate_dimensions_and_types() -> None:
             Project.empty(project_id="project-1"),
             canvas=Canvas(width=1280, height=720, reference_asset_id="missing"),
         )
+
+
+def test_analyzed_media_preserves_validated_source_timing_metadata() -> None:
+    video_stream = MediaStream(
+        index=0,
+        kind=MediaStreamKind.VIDEO,
+        codec_name="h264",
+        time_base=MediaTimeBase(2, 60_000),
+        start_pts=-1001,
+        duration_ts=300_300,
+        average_frame_rate=FrameRate(30_000, 1001),
+    )
+    media = replace(
+        _video(),
+        primary_stream_index=0,
+        streams=(video_stream,),
+    )
+
+    assert video_stream.time_base == MediaTimeBase(1, 30_000)
+    assert video_stream.time_base.seconds_per_tick.denominator == 30_000
+    assert media.streams == (video_stream,)
+
+    with pytest.raises(ProjectValidationError, match="identify"):
+        replace(media, primary_stream_index=1)
+    with pytest.raises(ProjectValidationError, match="unique"):
+        replace(media, streams=(video_stream, video_stream))
+    with pytest.raises(ProjectValidationError, match="match"):
+        replace(media, kind=MediaKind.AUDIO, width=None, height=None)
