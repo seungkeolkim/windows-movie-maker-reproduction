@@ -59,8 +59,10 @@ if (-not $uvCommand) {
     throw "uv was not found. Install it from https://docs.astral.sh/uv/getting-started/installation/."
 }
 
-$uvVersionText = (& $uvCommand.Source --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $uvVersionText -notmatch "uv\s+(\d+\.\d+\.\d+)") {
+$uvVersionOutput = & $uvCommand.Source --version 2>&1
+$uvExitCode = $LASTEXITCODE
+$uvVersionText = ($uvVersionOutput | Out-String).Trim()
+if ($uvExitCode -ne 0 -or $uvVersionText -notmatch "uv\s+(\d+\.\d+\.\d+)") {
     throw "Unable to determine the uv version: $uvVersionText"
 }
 $uvVersion = [version]$Matches[1]
@@ -87,17 +89,23 @@ if ($ffmpegParent -ne $ffprobeParent) {
     throw "ffmpeg and ffprobe were found in different directories. Use executables from the same FFmpeg build."
 }
 
-$ffmpegVersion = (& $ffmpegPath -hide_banner -version 2>&1 | Select-Object -First 1)
-if ($LASTEXITCODE -ne 0) {
+$ffmpegVersionOutput = & $ffmpegPath -hide_banner -version 2>&1
+$ffmpegExitCode = $LASTEXITCODE
+$ffmpegVersion = $ffmpegVersionOutput | Select-Object -First 1
+if ($ffmpegExitCode -ne 0) {
     throw "Unable to run ffmpeg: $ffmpegPath"
 }
-$ffprobeVersion = (& $ffprobePath -hide_banner -version 2>&1 | Select-Object -First 1)
-if ($LASTEXITCODE -ne 0) {
+$ffprobeVersionOutput = & $ffprobePath -hide_banner -version 2>&1
+$ffprobeExitCode = $LASTEXITCODE
+$ffprobeVersion = $ffprobeVersionOutput | Select-Object -First 1
+if ($ffprobeExitCode -ne 0) {
     throw "Unable to run ffprobe: $ffprobePath"
 }
 
-$encoders = (& $ffmpegPath -hide_banner -encoders 2>&1 | Out-String)
-if ($LASTEXITCODE -ne 0) {
+$encoderOutput = & $ffmpegPath -hide_banner -encoders 2>&1
+$encoderExitCode = $LASTEXITCODE
+$encoders = $encoderOutput | Out-String
+if ($encoderExitCode -ne 0) {
     throw "Unable to inspect the FFmpeg encoder list."
 }
 if ($encoders -notmatch "(?m)\s(libx264|h264_mf)\s") {
@@ -107,8 +115,10 @@ if ($encoders -notmatch "(?m)\s(aac|aac_mf)\s") {
     throw "An FFmpeg build containing an AAC encoder is required."
 }
 
-$filters = (& $ffmpegPath -hide_banner -filters 2>&1 | Out-String)
-if ($LASTEXITCODE -ne 0) {
+$filterOutput = & $ffmpegPath -hide_banner -filters 2>&1
+$filterExitCode = $LASTEXITCODE
+$filters = $filterOutput | Out-String
+if ($filterExitCode -ne 0) {
     throw "Unable to inspect the FFmpeg filter list."
 }
 $requiredFilters = @(
