@@ -6,6 +6,15 @@ This repository has an executable Python/Qt environment scaffold; video editing 
 
 Python application code lives in `src/movie_maker/`, Windows and Linux environment helpers in `scripts/environment/`, and automated tests in `tests/`. Keep future script families in purpose-specific subdirectories instead of mixing them in `scripts/`. Add feature packages such as `ui/`, `timeline/`, `media/`, and `project/` as implementation progresses; reserve `launcher/` for the native Windows launcher. Keep new documentation close to its subject and add architectural decisions as sequentially numbered ADRs.
 
+## Persistence & Database Constraints
+
+Project files remain versioned JSON documents unless an approved ADR changes that boundary. Do not add both
+SQLite and DuckDB, or otherwise introduce multiple file-based embedded database engines, for separate app
+features. If local indexed storage becomes necessary, select one embedded engine for the application and
+keep its schema, migration, backup, and recovery lifecycle together. Prefer SQLite for operational app data;
+consider DuckDB only as a measured alternative that replaces or consolidates the embedded store. A distinct
+server database such as PostgreSQL requires a separate multi-user or centralized-service need and a new ADR.
+
 ## Build, Test, and Development Commands
 
 - `.\scripts\environment\setup.ps1 -FFmpegDirectory <bin-path>` — creates the locked Windows runtime environment.

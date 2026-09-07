@@ -19,9 +19,10 @@
 | 10 | [ADR-0001: Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) | 현재 기술 스택과 실행 환경을 선택한 이유 및 제약 |
 | 11 | [ADR-0002: 명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) | MVP 편집 명령 구조와 1.0 실행 취소·다시 실행의 기반 |
 | 12 | [ADR-0003: 프로젝트 코어 상태, 시간 단위와 저장 경계](decisions/adr-0003-project-core-state-and-storage.md) | W-01 시간·불변 모델·명령 원자성과 DB 미사용 결정 |
-| 13 | [DESIGN-0003: 프로젝트 코어 계약](design/design-0003-project-core-contract.md) | 프로젝트 스키마 초안, 모델 불변식과 명령 프로토콜 |
-| 14 | [DESIGN-0004: 실제 미디어 분석과 보관함 계약](design/design-0004-media-library-contract.md) | W-02 ffprobe 분석, 부분 성공, 중복·썸네일·제거 안전 경계 |
-| 15 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
+| 13 | [ADR-0004: 파일 기반 경량 데이터베이스 단일화](decisions/adr-0004-single-embedded-database.md) | SQLite·DuckDB 병행 금지와 외부 서버 DB의 예외 승인 기준 |
+| 14 | [DESIGN-0003: 프로젝트 코어 계약](design/design-0003-project-core-contract.md) | 프로젝트 스키마 초안, 모델 불변식과 명령 프로토콜 |
+| 15 | [DESIGN-0004: 실제 미디어 분석과 보관함 계약](design/design-0004-media-library-contract.md) | W-02 ffprobe 분석, 부분 성공, 중복·썸네일·제거 안전 경계 |
+| 16 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
 
 제품 방향만 파악할 때는 1~4번을 읽는다. 화면을 변경하려면 DESIGN과 MOCK 문서까지, 실제
 로직을 연결하려면 MOCK-0003의 연결 순서와 관련 ADR까지 읽는다. 정책 문서는 미디어, 출력,
@@ -44,6 +45,7 @@
 | 실행 취소·다시 실행을 위해 MVP부터 어떤 편집 구조를 사용하는가 | [ADR-0002](decisions/adr-0002-command-based-edit-history.md) | [PRODUCT-0002](product/product-0002-feature-inventory.md) |
 | 프로젝트 시간, 클립 모델과 파일 스키마는 어떻게 표현하는가 | [DESIGN-0003](design/design-0003-project-core-contract.md) | [ADR-0003](decisions/adr-0003-project-core-state-and-storage.md) |
 | 프로젝트 상태에 데이터베이스를 사용하는가 | [ADR-0003](decisions/adr-0003-project-core-state-and-storage.md) | [DESIGN-0003](design/design-0003-project-core-contract.md) |
+| 파일 기반 DB를 몇 개까지 사용하고 언제 서버 DB를 검토하는가 | [ADR-0004](decisions/adr-0004-single-embedded-database.md) | [ADR-0003](decisions/adr-0003-project-core-state-and-storage.md) |
 | 실제 미디어를 어떻게 분석하고 안전하게 보관함에 추가하는가 | [DESIGN-0004](design/design-0004-media-library-contract.md) | [DESIGN-0003](design/design-0003-project-core-contract.md) |
 | 개발 및 실행 명령은 무엇인가 | [프로젝트 README](../README.md) | [스크립트 안내](../scripts/README.md) |
 | 출력 영상, FFmpeg, 코덱과 기본 자산의 권리 범위는 무엇인가 | [POLICY-0001](policies/policy-0001-licensing-and-output-rights.md) | [프로젝트 README](../README.md) |
@@ -125,6 +127,7 @@ W-03 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순�
 | `ADR-0001` | 승인됨 | [Python, uv 및 네이티브 런처](decisions/adr-0001-python-uv-native-launcher.md) |
 | `ADR-0002` | 승인됨 | [명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) |
 | `ADR-0003` | 승인됨 | [프로젝트 코어 상태, 시간 단위와 저장 경계](decisions/adr-0003-project-core-state-and-storage.md) |
+| `ADR-0004` | 승인됨 | [파일 기반 경량 데이터베이스 단일화](decisions/adr-0004-single-embedded-database.md) |
 | `POLICY-0001` | 초안 | [라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) |
 
 아키텍처 결정을 변경할 때 기존 ADR을 조용히 덮어쓰지 않는다. 새 ADR을 추가하고 이전 결정의
