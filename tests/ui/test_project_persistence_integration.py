@@ -63,6 +63,21 @@ def test_controller_save_as_and_open_round_trip_clear_new_session_history(
     assert len(controller.state.visual_clips) == 3
 
 
+def test_new_project_uses_new_id_and_empty_command_sessions() -> None:
+    controller = MockController()
+    first_id = controller.media_project.project_id
+    controller.import_sample_media()
+    assert controller.history_count == 1
+
+    controller.new_project()
+
+    assert controller.media_project.project_id != first_id
+    assert controller.media_project.media == ()
+    assert controller.history_count == 0
+    assert controller.media_history_count == 0
+    assert not controller.state.is_dirty
+
+
 def test_save_as_keeps_original_copy_and_changes_path_only_after_success(
     tmp_path: Path,
 ) -> None:
