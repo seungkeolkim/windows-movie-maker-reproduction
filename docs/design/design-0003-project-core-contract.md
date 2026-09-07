@@ -70,8 +70,9 @@ frame_time(n) = round(n × denominator × 1_000_000_000 / numerator)
 - 영상·오디오의 알려진 소스 길이 또는 사진의 `null`
 - 영상·사진의 회전 적용 전 픽셀 크기
 
-W-02는 실제 ffprobe 결과, 원본 time base와 스트림 정보를 이 경계에 추가한다. 원본 파일을
-수정하거나 프로젝트에 복제하지 않는다.
+W-02는 실제 ffprobe 결과, 원본 time base와 스트림 정보를 이 경계에 호환 가능한 선택
+필드로 추가한다. 상세 계약은 [DESIGN-0004](design-0004-media-library-contract.md)를 따른다.
+원본 파일을 수정하거나 프로젝트에 복제하지 않는다.
 
 ### 클립
 
