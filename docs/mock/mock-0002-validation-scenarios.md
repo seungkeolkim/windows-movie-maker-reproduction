@@ -10,12 +10,12 @@
 
 ## 목적
 
-이 문서는 W-02 실제 미디어 보관함, W-03 실제 프로젝트 파일과 고정 샘플 데이터를 함께
-사용해 MVP·1.0의 대표 흐름, 빈 상태, 오류 상태와 반응형 레이아웃을 같은 절차로 다시 검증하기
-위한 기준이다. 통과 결과는 [MOCK-0003](mock-0003-review-log.md)에 기록한다.
+이 문서는 W-02 실제 미디어 보관함, W-03 실제 프로젝트 파일, W-04 실제 타임라인 편집과 고정
+샘플 데이터를 함께 사용해 MVP·1.0의 대표 흐름, 빈 상태, 오류 상태와 반응형 레이아웃을 같은
+절차로 다시 검증하기 위한 기준이다. 통과 결과는 [MOCK-0003](mock-0003-review-log.md)에 기록한다.
 
 목업 통과는 실제 미디어 디코딩 또는 MP4 출력이 구현됐다는 뜻이 아니다. 프로젝트 직렬화는
-W-03에서 실제 서비스로 교체됐다.
+W-03에서, MVP 타임라인 편집은 W-04에서 실제 서비스로 교체됐다.
 현재 검증 대상은 기능 발견 가능성, 화면 배치, 입력에 따른 상태 변화, 피드백과 실제 서비스로
 교체할 경계다.
 
@@ -45,14 +45,13 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 | 화면과 사용자 의도 전달 | `src/movie_maker/ui/main_window.py` | 유지하며 서비스 호출 어댑터만 교체 |
 | 보조 화면과 대화상자 | `src/movie_maker/ui/dialogs.py` | 프로젝트 파일 선택, 장치 및 작업 서비스 연결 |
 | 고정 샘플 상태 구조 | `src/movie_maker/ui/mock_model.py` | 프로젝트·미디어 도메인 모델 |
-| 실제 보관함·프로젝트 파일과 가짜 후속 상태의 명령 경계 | `src/movie_maker/ui/mock_controller.py` | 타임라인, 재생 및 출력 서비스 |
+| 실제 보관함·프로젝트 파일·타임라인과 가짜 후속 상태의 명령 경계 | `src/movie_maker/ui/mock_controller.py` | 재생, 믹싱 및 출력 서비스 |
 | UI 및 상태 회귀 검증 | `tests/ui/` | 실제 서비스 계약 테스트와 함께 유지·확장 |
 
 위젯은 목업 상태를 직접 수정하지 않는다. 사용자 입력은 `MockController`의 의도 메서드로
-전달되고, 컨트롤러가 상태를 바꾼 뒤 신호로 화면을 다시 그리게 한다. 목업의 전체 상태 복사는
-실행 취소 화면을 빠르게 검증하기 위한 임시 구현이며, 실제 편집 코어는
-[ADR-0002](../decisions/adr-0002-command-based-edit-history.md)의 명령별 역연산 또는 이전 값
-계약을 사용한다.
+전달되고, 컨트롤러가 상태를 바꾼 뒤 신호로 화면을 다시 그리게 한다. W-04 타임라인 행동은
+[ADR-0002](../decisions/adr-0002-command-based-edit-history.md)의 명령별 최소 역연산 계약을
+사용한다. 전체 상태 복사는 다중 선택·복제·효과처럼 남은 목업 행동에만 사용한다.
 
 ## 공통 사전 조건
 
@@ -60,7 +59,7 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 - `미디어 가져오기`는 운영체제 다중 파일 선택 창에서 선택한 실제 파일을 분석한다.
 - 후속 목업 흐름은 `샘플 편집 프로젝트 불러오기`의 정상 샘플 다섯 개를 사용한다.
 - `프로젝트 열기`와 `샘플 편집 프로젝트 불러오기`는 19초짜리 `제주 여행 목업`을 연다.
-- 선택한 원본은 읽기만 하며 프로젝트 파일과 MP4 파일은 아직 만들지 않는다.
+- 선택한 원본은 읽기만 한다. 프로젝트 파일은 실제로 만들며 MP4 파일은 아직 만들지 않는다.
 - 정상 흐름과 오류 흐름 모두 현재 프로젝트의 편집 상태를 잃지 않아야 한다.
 
 ## MVP 핵심 흐름
@@ -104,7 +103,7 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 - 음악 속성 변경은 고정 음악 트랙과 출력 요약의 프로젝트 길이를 일관되게 유지한다.
 - 미디어 선택과 클립 선택은 서로 해제되고 속성 문맥이 즉시 바뀐다.
 
-자동 검증: `test_media_is_added_to_fixed_tracks_and_original_canvas_is_locked`,
+자동 검증: `test_controller_adds_real_clips_to_all_fixed_media_tracks`,
 `test_timeline_selection_updates_preview_and_inspector`.
 
 ### V-MVP-03: 순서, 트리밍, 사진 길이와 영상 속도
@@ -124,7 +123,8 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 - 순서와 길이 변화가 타임라인, 전체 길이, 재생 위치와 미리 보기에 함께 반영된다.
 - 한 번의 `속성 적용`은 행동 이력 하나로 기록된다.
 
-자동 검증: `test_speed_change_uses_source_span_and_property_apply_is_one_command`.
+자동 검증: `test_property_apply_is_one_real_command_and_save_keeps_history`와
+`tests/timeline/test_editing.py`의 트리밍·사진 길이·유리수 속도 검증.
 
 ### V-MVP-04: 실수 구간 분할과 삭제
 
@@ -142,7 +142,8 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 - 시각 클립 삭제 뒤 빈 시간이 사라지고 전체 길이와 재생 헤드가 유효 범위로 조정된다.
 - 보관함 항목과 원본은 삭제되지 않는다.
 
-자동 검증: `test_split_undo_redo_and_history_branch_preserve_timeline_length`.
+자동 검증: `test_controller_move_split_delete_and_shortcuts_use_real_history`와
+`tests/timeline/test_editing.py`의 분할·삭제·리플·명령 왕복 검증.
 
 ### V-MVP-05: 저장, 다른 이름으로 저장과 다시 열기
 

@@ -101,6 +101,11 @@ W-03에서 위 경계를 `src/movie_maker/project/persistence.py`와 실제 Qt �
 구현했다. 확정된 스키마와 실패·취소 시 세션 불변 계약은
 [DESIGN-0005](../design/design-0005-project-persistence-contract.md)에 기록한다.
 
+W-04는 스키마 1을 유지한 채 source 범위와 유리수 재생 속도로 클립 길이를 검증하고, 실제
+프레임률·샘플률·time base 우선순위에 따라 편집점을 결정적으로 스냅한다. 시각 트랙은 명령
+결과마다 연속 위치를 다시 계산하고 보조 트랙은 절대 위치를 유지한다. 상세 계약은
+[DESIGN-0006](../design/design-0006-timeline-editing-contract.md)에 기록한다.
+
 ## 결과
 
 ### 장점

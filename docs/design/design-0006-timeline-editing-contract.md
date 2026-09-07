@@ -170,8 +170,24 @@ mtime을 갱신하지 않는다. SQLite, DuckDB, PostgreSQL 등 데이터베이�
 
 ## 완료 조건
 
-- [ ] 실제 타임라인 명령과 시간 경계가 이 계약을 구현한다.
-- [ ] Qt의 MVP 타임라인 행동과 단축키가 공유 명령 실행기에 연결된다.
-- [ ] 저장·열기와 원본 안전 검증을 포함한 전체 회귀가 통과한다.
-- [ ] README와 관련 DESIGN·MOCK 문서가 W-04 완료 및 W-05 다음 작업을 표시한다.
+- [x] 실제 타임라인 명령과 시간 경계가 이 계약을 구현한다.
+- [x] Qt의 MVP 타임라인 행동과 단축키가 공유 명령 실행기에 연결된다.
+- [x] 저장·열기와 원본 안전 검증을 포함한 전체 회귀가 통과한다.
+- [x] README와 관련 DESIGN·MOCK 문서가 W-04 완료 및 W-05 다음 작업을 표시한다.
 
+## 구현 결과
+
+| 계약 | 구현 | 자동 검증 |
+| --- | --- | --- |
+| 시간 경계·리플·편집 명령 | `src/movie_maker/timeline/editing.py` | `tests/timeline/test_editing.py` |
+| 클립 시간·사진 불변식 | `src/movie_maker/project/model.py` | `tests/project/test_model.py` |
+| 미디어·타임라인 공용 이력 | `src/movie_maker/media/library.py` | `tests/media/`, `tests/timeline/` |
+| Qt 행동·단축키·저장 왕복 | `src/movie_maker/ui/` | `tests/ui/test_timeline_editing_integration.py` |
+
+W-04 완료 시 전체 139개 pytest 테스트가 통과했다. Ruff, strict mypy, 애플리케이션
+`--check`와 `git diff --check`도 통과했다. 24000/1001, 30000/1001, 60000/1001fps 장기
+경계와 오디오 샘플 경계, 모든 편집 명령의 undo/redo, 실패 원자성, JSON 왕복과 원본 파일
+SHA-256·크기·수정 시간 불변을 자동 검증했다.
+
+다음 작업은 `W-05` 미리 보기 시간축과 실제 디코딩이다. 음량·음소거·맞춤·효과, 복제·다중
+선택과 텍스트·전환은 각 후속 작업 전까지 명시적인 목업 상태로 유지한다.
