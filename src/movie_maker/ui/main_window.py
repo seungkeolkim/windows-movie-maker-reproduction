@@ -72,6 +72,8 @@ from movie_maker.ui.mock_model import (
 )
 
 MediaFileSelector = Callable[[], Sequence[str]]
+ProjectOpenSelector = Callable[[], str | None]
+ProjectSaveSelector = Callable[[str | None], str | None]
 
 
 def _file_patterns(extensions: frozenset[str]) -> str:
@@ -97,6 +99,8 @@ class MainWindow(QMainWindow):
         controller: MockController | None = None,
         *,
         media_file_selector: MediaFileSelector | None = None,
+        project_open_selector: ProjectOpenSelector | None = None,
+        project_save_selector: ProjectSaveSelector | None = None,
     ) -> None:
         super().__init__()
         self.setObjectName("S-EDITOR")
@@ -105,6 +109,8 @@ class MainWindow(QMainWindow):
         self.resize(1440, 900)
         self.controller = controller or MockController()
         self._media_file_selector = media_file_selector or self._choose_media_files
+        self._project_open_selector = project_open_selector or self._choose_project_to_open
+        self._project_save_selector = project_save_selector or self._choose_project_to_save
         self._allow_close = False
         self._showing_transition = False
         self._responsive_hidden_inspector = False
@@ -808,10 +814,10 @@ class MainWindow(QMainWindow):
         self._actions = {
             "new": self._action("새 프로젝트", self._request_new_project, "Ctrl+N"),
             "open": self._action("프로젝트 열기…", self._request_open_project, "Ctrl+O"),
-            "save": self._action("저장", self.controller.save_project, "Ctrl+S"),
+            "save": self._action("저장", self._request_save, "Ctrl+S"),
             "save_as": self._action(
                 "다른 이름으로 저장…",
-                lambda: self.controller.save_project(save_as=True),
+                lambda: self._request_save(save_as=True),
                 "Ctrl+Shift+S",
             ),
             "import": self._action(
@@ -1750,17 +1756,16 @@ class MainWindow(QMainWindow):
             return
 
         def save_then_continue() -> None:
-            self.controller.save_project()
-            continuation()
+            if self._request_save():
+                continuation()
 
         def discard_then_continue() -> None:
-            self.controller.discard_unsaved_changes()
             continuation()
 
         dialog = DecisionDialog(
             title="저장하지 않은 변경",
             heading=f"‘{self.controller.state.project_name}’의 변경을 저장할까요?",
-            body="계속하면 현재 목업 편집 상태가 바뀝니다. 원본 미디어는 삭제되지 않습니다.",
+            body="계속하면 현재 편집 상태가 바뀝니다. 원본 미디어는 삭제되지 않습니다.",
             actions=[
                 ("저장하고 계속", save_then_continue, True),
                 ("저장하지 않고 계속", discard_then_continue, False),
@@ -1774,7 +1779,56 @@ class MainWindow(QMainWindow):
         self._guard_unsaved(self.controller.new_project)
 
     def _request_open_project(self) -> None:
-        self._guard_unsaved(self.controller.load_sample_project)
+        self._guard_unsaved(self._open_selected_project)
+
+    def _choose_project_to_open(self) -> str | None:
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "프로젝트 열기",
+            "",
+            "Movie Maker 프로젝트 (*.mmrproj);;JSON 파일 (*.json);;모든 파일 (*)",
+        )
+        return path or None
+
+    def _choose_project_to_save(self, current_path: str | None) -> str | None:
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "프로젝트 저장",
+            current_path or "제목 없음.mmrproj",
+            "Movie Maker 프로젝트 (*.mmrproj);;JSON 파일 (*.json)",
+        )
+        return path or None
+
+    def _request_save(self, *, save_as: bool = False) -> bool:
+        target = self.controller.state.project_path
+        if save_as or target is None:
+            target = self._project_save_selector(self.controller.state.project_path)
+            if target is None:
+                self.controller.report_status("프로젝트 저장을 취소했습니다")
+                return False
+        if self.controller.save_project(target):
+            return True
+        self._show_project_error("프로젝트를 저장하지 못했습니다")
+        return False
+
+    def _open_selected_project(self) -> None:
+        path = self._project_open_selector()
+        if path is None:
+            self.controller.report_status("프로젝트 열기를 취소했습니다")
+            return
+        if not self.controller.open_project(path):
+            self._show_project_error("프로젝트를 열지 못했습니다")
+
+    def _show_project_error(self, heading: str) -> None:
+        detail = self.controller.last_persistence_error or "파일을 확인하고 다시 시도하세요."
+        dialog = DecisionDialog(
+            title="프로젝트 파일 오류",
+            heading=heading,
+            body=f"{detail}\n현재 프로젝트와 기존 정상 파일은 변경되지 않았습니다.",
+            actions=[("확인", lambda: None, True)],
+            parent=self,
+        )
+        self._show_dialog(dialog)
 
     def _choose_media_files(self) -> Sequence[str]:
         files, _selected_filter = QFileDialog.getOpenFileNames(
@@ -1921,19 +1975,18 @@ class MainWindow(QMainWindow):
         event.ignore()
 
         def save_and_close() -> None:
-            self.controller.save_project()
-            self._allow_close = True
-            self.close()
+            if self._request_save():
+                self._allow_close = True
+                self.close()
 
         def discard_and_close() -> None:
-            self.controller.discard_unsaved_changes()
             self._allow_close = True
             self.close()
 
         dialog = DecisionDialog(
             title="프로젝트 닫기",
             heading=f"‘{self.controller.state.project_name}’의 변경을 저장할까요?",
-            body="취소하면 편집기와 현재 목업 상태가 그대로 유지됩니다.",
+            body="취소하면 편집기와 현재 상태가 그대로 유지됩니다.",
             actions=[
                 ("저장하고 닫기", save_and_close, True),
                 ("저장하지 않고 닫기", discard_and_close, False),

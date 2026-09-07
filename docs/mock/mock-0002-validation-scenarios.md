@@ -10,11 +10,12 @@
 
 ## 목적
 
-이 문서는 W-02 실제 미디어 보관함과 고정 샘플 데이터를 함께 사용해 MVP·1.0의 대표 흐름,
-빈 상태, 오류 상태와 반응형 레이아웃을 같은 절차로 다시 검증하기 위한 기준이다. 통과 결과는
-[MOCK-0003](mock-0003-review-log.md)에 기록한다.
+이 문서는 W-02 실제 미디어 보관함, W-03 실제 프로젝트 파일과 고정 샘플 데이터를 함께
+사용해 MVP·1.0의 대표 흐름, 빈 상태, 오류 상태와 반응형 레이아웃을 같은 절차로 다시 검증하기
+위한 기준이다. 통과 결과는 [MOCK-0003](mock-0003-review-log.md)에 기록한다.
 
-목업 통과는 실제 미디어 디코딩, 프로젝트 직렬화 또는 MP4 출력이 구현됐다는 뜻이 아니다.
+목업 통과는 실제 미디어 디코딩 또는 MP4 출력이 구현됐다는 뜻이 아니다. 프로젝트 직렬화는
+W-03에서 실제 서비스로 교체됐다.
 현재 검증 대상은 기능 발견 가능성, 화면 배치, 입력에 따른 상태 변화, 피드백과 실제 서비스로
 교체할 경계다.
 
@@ -44,7 +45,7 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 | 화면과 사용자 의도 전달 | `src/movie_maker/ui/main_window.py` | 유지하며 서비스 호출 어댑터만 교체 |
 | 보조 화면과 대화상자 | `src/movie_maker/ui/dialogs.py` | 프로젝트 파일 선택, 장치 및 작업 서비스 연결 |
 | 고정 샘플 상태 구조 | `src/movie_maker/ui/mock_model.py` | 프로젝트·미디어 도메인 모델 |
-| 실제 보관함과 가짜 후속 상태의 명령 경계 | `src/movie_maker/ui/mock_controller.py` | 프로젝트 저장소, 타임라인, 재생 및 출력 서비스 |
+| 실제 보관함·프로젝트 파일과 가짜 후속 상태의 명령 경계 | `src/movie_maker/ui/mock_controller.py` | 타임라인, 재생 및 출력 서비스 |
 | UI 및 상태 회귀 검증 | `tests/ui/` | 실제 서비스 계약 테스트와 함께 유지·확장 |
 
 위젯은 목업 상태를 직접 수정하지 않는다. 사용자 입력은 `MockController`의 의도 메서드로
@@ -151,18 +152,19 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 2. 다시 편집하고 새 프로젝트 또는 프로젝트 열기를 실행한다.
 3. 저장, 저장하지 않고 계속, 취소를 각각 확인한다.
 4. `다른 이름으로 저장`을 실행한다.
-5. 1.0 최근 프로젝트 메뉴에서 샘플 프로젝트를 다시 연다.
+5. 저장한 프로젝트 파일을 파일 대화상자에서 다시 연다.
 
 합격 기준:
 
-- 첫 저장은 목업 경로와 프로젝트명을 정하고 `*`를 없앤다.
+- 첫 저장은 실제 경로를 선택하고 원자적 교체가 성공한 뒤 `*`를 없앤다.
 - 저장 확인은 프로젝트명과 실제 결과를 말하는 동사형 버튼을 사용한다.
 - 취소는 프로젝트, 선택과 편집 내용을 그대로 유지한다.
-- 최근 항목은 프로젝트명과 상태를 보여 주고 같은 열기·누락 처리 경계를 사용한다.
-- 목업 저장임과 실제 파일이 생성되지 않았음을 명시한다.
+- 누락 원본이 있어도 프로젝트 구조와 편집점을 보존하고 누락 상태를 표시한다.
+- 저장·열기 취소나 실패는 현재 프로젝트, 경로, 이름과 dirty를 유지한다.
 
-자동 검증: `test_mock_save_marks_current_result_clean_without_serialising_history`.
-저장 확인 세 가지 분기는 수동 검증한다.
+자동 검증: `test_real_save_marks_current_result_clean_without_serialising_history`,
+`test_controller_save_as_and_open_round_trip_clear_new_session_history`,
+`test_unsaved_new_project_confirmation_handles_all_three_branches`.
 
 ### V-MVP-06: 보관함 항목 제거
 

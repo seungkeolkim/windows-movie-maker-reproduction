@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from movie_maker.ui.mock_controller import MockController
 from movie_maker.ui.mock_model import AssetStatus, ExportState, TrackKind
 
@@ -217,17 +219,21 @@ def test_export_can_complete_cancel_and_fail_without_creating_a_file() -> None:
     assert controller.state.export_error == "디스크 공간이 부족합니다"
 
 
-def test_mock_save_marks_current_result_clean_without_serialising_history() -> None:
+def test_real_save_marks_current_result_clean_without_serialising_history(
+    tmp_path: Path,
+) -> None:
     controller = MockController()
     controller.import_sample_media()
     history_before = controller.history_count
+    target = tmp_path / "saved project.mmrproj"
 
-    controller.save_project()
+    assert controller.save_project(str(target))
 
-    assert controller.state.project_path == r"C:\MockProjects\제주 여행 목업.mmrproj"
-    assert controller.state.project_name == "제주 여행 목업"
+    assert controller.state.project_path == str(target)
+    assert controller.state.project_name == "제목 없음"
     assert not controller.state.is_dirty
     assert controller.history_count == history_before
+    assert target.is_file()
 
 
 def test_controller_owns_export_recovery_and_discard_screen_state() -> None:

@@ -31,6 +31,16 @@ from movie_maker.project.model import (
     TimelineTrack,
     TrackKind,
 )
+from movie_maker.project.persistence import (
+    InvalidProjectDocument,
+    ProjectFileStore,
+    ProjectPersistenceError,
+    ProjectReadError,
+    ProjectWriteError,
+    UnsupportedProjectVersion,
+    project_from_document,
+    project_to_document,
+)
 from movie_maker.project.time import FrameRate, ProjectTime, TimeRounding
 
 __all__ = [
@@ -48,6 +58,7 @@ __all__ = [
     "HistoryUnavailable",
     "InsertClip",
     "InsertMediaReference",
+    "InvalidProjectDocument",
     "MediaKind",
     "MediaReference",
     "MediaStream",
@@ -56,12 +67,19 @@ __all__ = [
     "PlaybackRate",
     "Project",
     "ProjectCommand",
+    "ProjectFileStore",
+    "ProjectPersistenceError",
+    "ProjectReadError",
     "ProjectTime",
     "ProjectValidationError",
+    "ProjectWriteError",
     "RemoveClip",
     "RemoveMediaReference",
     "RenameProject",
     "TimeRounding",
     "TimelineTrack",
     "TrackKind",
+    "UnsupportedProjectVersion",
+    "project_from_document",
+    "project_to_document",
 ]
