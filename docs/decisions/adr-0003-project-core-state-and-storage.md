@@ -97,6 +97,10 @@ W-03은 이 결정과 DESIGN-0003을 기준으로 다음 순서를 구현한다.
    읽기를 거부한다.
 6. 자동 저장과 충돌 복구는 W-10에서 정상 저장본을 덮어쓰지 않는 별도 파일로 구현한다.
 
+W-03에서 위 경계를 `src/movie_maker/project/persistence.py`와 실제 Qt 저장·열기 흐름으로
+구현했다. 확정된 스키마와 실패·취소 시 세션 불변 계약은
+[DESIGN-0005](../design/design-0005-project-persistence-contract.md)에 기록한다.
+
 ## 결과
 
 ### 장점
