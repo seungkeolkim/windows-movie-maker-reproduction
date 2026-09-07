@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from fractions import Fraction
 from itertools import count
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal
 
@@ -15,8 +17,19 @@ from movie_maker.media import (
     MediaLibrary,
     MediaRemovalFailure,
 )
-from movie_maker.project import MediaKind as CoreMediaKind
-from movie_maker.project import Project
+from movie_maker.project import (
+    Canvas,
+    Clip,
+    MediaReference,
+    PlaybackRate,
+    Project,
+    ProjectFileStore,
+    ProjectPersistenceError,
+    ProjectTime,
+    TimelineTrack,
+)
+from movie_maker.project.model import MediaKind as CoreMediaKind
+from movie_maker.project.model import TrackKind as CoreTrackKind
 from movie_maker.ui.mock_model import (
     AssetStatus,
     ExportState,
@@ -33,11 +46,19 @@ CORE_TO_UI_MEDIA_KIND = {
     CoreMediaKind.PHOTO: MediaKind.PHOTO,
     CoreMediaKind.AUDIO: MediaKind.AUDIO,
 }
+UI_TO_CORE_MEDIA_KIND = {value: key for key, value in CORE_TO_UI_MEDIA_KIND.items()}
 MEDIA_COLORS = {
     CoreMediaKind.VIDEO: "#2f79b9",
     CoreMediaKind.PHOTO: "#4d8a66",
     CoreMediaKind.AUDIO: "#8563b8",
 }
+CORE_TO_UI_TRACK_KIND = {
+    CoreTrackKind.VISUAL: TrackKind.VISUAL,
+    CoreTrackKind.MUSIC: TrackKind.MUSIC,
+    CoreTrackKind.NARRATION: TrackKind.NARRATION,
+    CoreTrackKind.TEXT: TrackKind.TEXT,
+}
+UI_TO_CORE_TRACK_KIND = {value: key for key, value in CORE_TO_UI_TRACK_KIND.items()}
 
 
 def _sample_assets() -> dict[str, MockAsset]:
@@ -125,10 +146,16 @@ class MockController(QObject):
     status_changed = Signal(str)
     export_changed = Signal()
 
-    def __init__(self, media_library: MediaLibrary | None = None) -> None:
+    def __init__(
+        self,
+        media_library: MediaLibrary | None = None,
+        project_store: ProjectFileStore | None = None,
+    ) -> None:
         super().__init__()
         self.state = MockProjectState()
         self._media_library = media_library or MediaLibrary.create_default()
+        self._project_store = project_store or ProjectFileStore()
+        self.last_persistence_error: str | None = None
         self._history: list[MockHistoryEntry] = []
         self._history_position = 0
         self._id_counter = count(1)
@@ -210,7 +237,12 @@ class MockController(QObject):
         return self.state.text_clips
 
     def _next_id(self, prefix: str) -> str:
-        return f"{prefix}-{next(self._id_counter):04d}"
+        existing = set(self.state.assets)
+        existing.update(clip.clip_id for clip in self.state.all_clips)
+        while True:
+            candidate = f"{prefix}-{next(self._id_counter):04d}"
+            if candidate not in existing:
+                return candidate
 
     def _publish(self) -> None:
         self.state_changed.emit()
@@ -260,10 +292,157 @@ class MockController(QObject):
         self._history_position = 0
 
     def new_project(self) -> None:
-        self._media_library.reset()
-        self.state = MockProjectState(status_message="새 프로젝트를 만들었습니다 · 목업")
+        project = Project.empty(project_id=str(uuid4()))
+        self._media_library.reset(project)
+        self.state = MockProjectState(status_message="새 프로젝트를 만들었습니다")
+        self.last_persistence_error = None
         self._reset_history()
         self._publish()
+
+    def _persistent_project(self) -> Project:
+        base_project = self._media_library.project
+        core_media = {media.asset_id: media for media in base_project.media}
+        media: list[MediaReference] = []
+        for asset in self.state.assets.values():
+            reference = core_media.get(asset.asset_id)
+            if reference is None:
+                reference = MediaReference(
+                    asset_id=asset.asset_id,
+                    name=asset.name,
+                    source_path=asset.source_path,
+                    kind=UI_TO_CORE_MEDIA_KIND[asset.kind],
+                    duration=(
+                        ProjectTime.from_milliseconds(asset.duration_ms)
+                        if asset.duration_ms is not None
+                        else None
+                    ),
+                    width=asset.width,
+                    height=asset.height,
+                )
+            media.append(reference)
+
+        clips_by_track: dict[CoreTrackKind, list[Clip]] = {
+            kind: [] for kind in CoreTrackKind
+        }
+        for mock_clip in self.state.all_clips:
+            try:
+                exact_clip = base_project.clip(mock_clip.clip_id)
+            except KeyError:
+                exact_clip = None
+            if exact_clip is not None and self._mock_matches_exact_clip(mock_clip, exact_clip):
+                clips_by_track[exact_clip.track].append(exact_clip)
+                continue
+            rate = Fraction(str(mock_clip.speed))
+            core_track = UI_TO_CORE_TRACK_KIND[mock_clip.track]
+            clips_by_track[core_track].append(
+                Clip(
+                    clip_id=mock_clip.clip_id,
+                    track=core_track,
+                    asset_id=mock_clip.asset_id,
+                    label=mock_clip.label,
+                    timeline_start=ProjectTime.from_milliseconds(mock_clip.start_ms),
+                    duration=ProjectTime.from_milliseconds(mock_clip.duration_ms),
+                    source_in=ProjectTime.from_milliseconds(mock_clip.source_in_ms),
+                    source_out=(
+                        ProjectTime.from_milliseconds(mock_clip.source_out_ms)
+                        if mock_clip.source_out_ms is not None
+                        else None
+                    ),
+                    playback_rate=PlaybackRate(rate.numerator, rate.denominator),
+                )
+            )
+        return Project(
+            schema_version=base_project.schema_version,
+            project_id=base_project.project_id,
+            name=self.state.project_name,
+            canvas=Canvas(
+                self.state.canvas_width,
+                self.state.canvas_height,
+                self.state.reference_asset_id,
+            ),
+            media=tuple(media),
+            tracks=tuple(
+                TimelineTrack(kind, tuple(clips_by_track[kind])) for kind in CoreTrackKind
+            ),
+        )
+
+    @staticmethod
+    def _mock_matches_exact_clip(mock_clip: MockClip, exact_clip: Clip) -> bool:
+        return (
+            UI_TO_CORE_TRACK_KIND[mock_clip.track] is exact_clip.track
+            and mock_clip.asset_id == exact_clip.asset_id
+            and mock_clip.label == exact_clip.label
+            and mock_clip.start_ms == exact_clip.timeline_start.to_milliseconds()
+            and mock_clip.duration_ms == exact_clip.duration.to_milliseconds()
+            and mock_clip.source_in_ms == exact_clip.source_in.to_milliseconds()
+            and mock_clip.source_out_ms
+            == (
+                exact_clip.source_out.to_milliseconds()
+                if exact_clip.source_out is not None
+                else None
+            )
+            and mock_clip.speed == float(exact_clip.playback_rate.fraction)
+        )
+
+    @staticmethod
+    def _state_from_project(project: Project, path: str) -> MockProjectState:
+        assets: dict[str, MockAsset] = {}
+        for media in project.media:
+            assets[media.asset_id] = MockAsset(
+                asset_id=media.asset_id,
+                name=media.name,
+                kind=CORE_TO_UI_MEDIA_KIND[media.kind],
+                duration_ms=(
+                    media.duration.to_milliseconds() if media.duration is not None else None
+                ),
+                width=media.width,
+                height=media.height,
+                color=MEDIA_COLORS[media.kind],
+                source_path=media.source_path,
+                status=(
+                    AssetStatus.READY if Path(media.source_path).is_file() else AssetStatus.MISSING
+                ),
+                is_real_media=True,
+            )
+
+        state = MockProjectState(
+            project_name=project.name,
+            project_path=path,
+            assets=assets,
+            canvas_width=project.canvas.width,
+            canvas_height=project.canvas.height,
+            reference_asset_id=project.canvas.reference_asset_id,
+            status_message="프로젝트를 열었습니다",
+        )
+        target_lists = {
+            TrackKind.VISUAL: state.visual_clips,
+            TrackKind.MUSIC: state.music_clips,
+            TrackKind.NARRATION: state.narration_clips,
+            TrackKind.TEXT: state.text_clips,
+        }
+        for track in project.tracks:
+            for clip in track.clips:
+                target_lists[CORE_TO_UI_TRACK_KIND[track.kind]].append(
+                    MockClip(
+                        clip_id=clip.clip_id,
+                        track=CORE_TO_UI_TRACK_KIND[track.kind],
+                        asset_id=clip.asset_id,
+                        label=clip.label,
+                        start_ms=clip.timeline_start.to_milliseconds(),
+                        duration_ms=clip.duration.to_milliseconds(),
+                        source_in_ms=clip.source_in.to_milliseconds(),
+                        source_out_ms=(
+                            clip.source_out.to_milliseconds()
+                            if clip.source_out is not None
+                            else None
+                        ),
+                        speed=float(clip.playback_rate.fraction),
+                    )
+                )
+        missing_count = sum(asset.status is AssetStatus.MISSING for asset in assets.values())
+        if missing_count:
+            state.status_message = f"프로젝트를 열었습니다 · 누락 미디어 {missing_count}개"
+        return state
 
     def import_sample_media(self) -> None:
         samples = _sample_assets()
@@ -433,16 +612,42 @@ class MockController(QObject):
         self._reset_history()
         self._publish()
 
-    def save_project(self, *, save_as: bool = False) -> None:
-        if save_as:
-            self.state.project_name = "제주 여행 목업 사본"
-            self.state.project_path = r"C:\MockProjects\제주 여행 목업 사본.mmrproj"
-        elif self.state.project_path is None:
-            self.state.project_name = "제주 여행 목업"
-            self.state.project_path = r"C:\MockProjects\제주 여행 목업.mmrproj"
+    def save_project(self, path: str | None = None) -> bool:
+        target = path or self.state.project_path
+        if target is None:
+            self.last_persistence_error = None
+            self._set_status("프로젝트 저장을 취소했습니다")
+            return False
+        try:
+            project = self._persistent_project()
+            self._project_store.save(project, target)
+        except (ProjectPersistenceError, ValueError) as error:
+            self.last_persistence_error = str(error)
+            self._set_status(f"프로젝트 저장 실패 · {error}")
+            return False
+        self.state.project_path = str(Path(target))
         self.state.is_dirty = False
-        self._set_status("목업 저장 완료 — 실제 파일은 생성되지 않았습니다")
+        self.last_persistence_error = None
+        self._set_status("프로젝트를 저장했습니다")
         self.state_changed.emit()
+        return True
+
+    def open_project(self, path: str) -> bool:
+        try:
+            project = self._project_store.load(path)
+            next_state = self._state_from_project(project, str(Path(path)))
+        except (ProjectPersistenceError, ValueError) as error:
+            self.last_persistence_error = str(error)
+            self._set_status(f"프로젝트 열기 실패 · {error}")
+            return False
+
+        self._media_library.reset(project)
+        self.state = next_state
+        self._reset_history()
+        self._id_counter = count(1)
+        self.last_persistence_error = None
+        self._publish()
+        return True
 
     def discard_unsaved_changes(self) -> None:
         """Clear the dirty flag through the controller boundary."""
