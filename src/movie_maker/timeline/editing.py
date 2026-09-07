@@ -217,6 +217,37 @@ class _ReplaceTimelineRange:
 
 
 @dataclass(frozen=True, slots=True)
+class _ReplaceOneClip:
+    expected: Clip
+    replacement: Clip
+    history_label: str
+
+    @property
+    def label(self) -> str:
+        return self.history_label
+
+    def apply(self, project: Project) -> CommandApplication:
+        track, index, current = _locate_clip(project, self.expected.clip_id)
+        if current != self.expected:
+            raise CommandRejected("편집 대상 클립이 명령 준비 이후 변경되었습니다.")
+        if self.replacement.clip_id != current.clip_id:
+            raise CommandRejected("속성 변경은 클립 ID를 바꿀 수 없습니다.")
+        if self.replacement.track is not current.track:
+            raise CommandRejected("속성 변경은 클립 트랙을 바꿀 수 없습니다.")
+
+        clips = [*track.clips]
+        clips[index] = self.replacement
+        if track.kind is not TrackKind.VISUAL:
+            clips.sort(key=lambda clip: clip.timeline_start)
+        next_project = _replace_track(project, track.kind, tuple(clips))
+        next_clip = next_project.clip(current.clip_id)
+        return CommandApplication(
+            next_project,
+            _ReplaceOneClip(next_clip, current, self.history_label),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AddMediaClip:
     """Create and append a correctly routed clip for one project media reference."""
 
@@ -452,6 +483,7 @@ class UpdateClipTiming:
     source_out: ProjectTime | None = None
     photo_duration: ProjectTime | None = None
     playback_rate: PlaybackRate | None = None
+    timeline_start: ProjectTime | None = None
     history_label: str = "클립 속성 적용"
 
     @property
@@ -459,7 +491,7 @@ class UpdateClipTiming:
         return self.history_label
 
     def apply(self, project: Project) -> CommandApplication:
-        track, index, clip = _locate_clip(project, self.clip_id)
+        track, _, clip = _locate_clip(project, self.clip_id)
         media = _media_for_clip(project, clip)
 
         if media.kind is MediaKind.PHOTO:
@@ -517,15 +549,16 @@ class UpdateClipTiming:
                 playback_rate=rate,
             )
 
+        if self.timeline_start is not None:
+            if self.timeline_start.nanoseconds < 0:
+                raise CommandRejected("클립 시작 위치는 0보다 작을 수 없습니다.")
+            if track.kind is TrackKind.VISUAL and self.timeline_start != clip.timeline_start:
+                raise CommandRejected("시각 클립 시작은 리플 순서에서 자동으로 계산됩니다.")
+            replacement = replace(replacement, timeline_start=self.timeline_start)
+
         if replacement == clip:
             raise CommandRejected("입력한 값이 현재 클립 속성과 같습니다.")
-        command = _ReplaceTimelineRange(
-            track=track.kind,
-            index=index,
-            expected=(clip,),
-            replacement=(replacement,),
-            history_label=self.history_label,
-        )
+        command = _ReplaceOneClip(clip, replacement, self.history_label)
         return command.apply(project)
 
 

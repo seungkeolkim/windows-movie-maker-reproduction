@@ -121,16 +121,21 @@ def test_ui_open_then_save_preserves_sub_millisecond_clip_times_and_exact_rate(
             ),
         ),
     )
+    source_in = ProjectTime(111_111_111)
+    source_out = ProjectTime(5_116_116_615)
+    playback_rate = PlaybackRate(24_000, 1_001)
     precise_clip = Clip(
         clip_id="precise-clip",
         track=TrackKind.VISUAL,
         asset_id=media.asset_id,
         label="정밀 클립",
         timeline_start=ProjectTime.zero(),
-        duration=ProjectTime(5_000_000_499),
-        source_in=ProjectTime(111_111_111),
-        source_out=ProjectTime(5_116_116_615),
-        playback_rate=PlaybackRate(24_000, 1_001),
+        duration=ProjectTime.from_seconds(
+            (source_out - source_in).to_fractional_seconds() / playback_rate.fraction
+        ),
+        source_in=source_in,
+        source_out=source_out,
+        playback_rate=playback_rate,
     )
     project = Project(
         schema_version=1,

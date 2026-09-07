@@ -336,6 +336,12 @@ class CommandExecutor:
     def redo_label(self) -> str | None:
         return self._history[self._position].label if self.can_redo else None
 
+    def discard_redo(self) -> None:
+        """Drop commands after the current position without changing the project."""
+
+        if self.can_redo:
+            self._history = self._history[: self._position]
+
     def execute(self, command: ProjectCommand) -> Project:
         """Apply and commit a new command, truncating any abandoned redo branch."""
 

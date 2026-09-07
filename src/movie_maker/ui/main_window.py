@@ -179,7 +179,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(heading)
         description = QLabel(
             "로컬 영상, 사진과 오디오를 가져와 미디어 보관함을 만들 수 있습니다.\n"
-            "가져오기와 분석은 실제 파일을 사용하며 타임라인 이후 기능은 목업입니다."
+            "가져오기, 프로젝트 저장과 타임라인 편집은 실제 기능이며 재생·출력은 목업입니다."
         )
         description.setObjectName("secondaryText")
         description.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -828,8 +828,8 @@ class MainWindow(QMainWindow):
             "remove_asset": self._action("보관함에서 제거", self._request_remove_asset),
             "export": self._action("동영상 저장…", self._open_export_settings, "Ctrl+E"),
             "exit": self._action("종료", self.close),
-            "undo": self._action("실행 취소 · 1.0", self.controller.undo, "Ctrl+Z"),
-            "redo": self._action("다시 실행 · 1.0", self.controller.redo, "Ctrl+Y"),
+            "undo": self._action("실행 취소", self.controller.undo, "Ctrl+Z"),
+            "redo": self._action("다시 실행", self.controller.redo, "Ctrl+Y"),
             "delete": self._action("선택 항목 삭제", self._delete_contextual, "Delete"),
             "split": self._action("재생 위치에서 분할", self.controller.split_selected_clip, "Ctrl+B"),
             "duplicate": self._action("클립 복제 · 1.0", self.controller.duplicate_selected_clip, "Ctrl+D"),
@@ -1090,7 +1090,7 @@ class MainWindow(QMainWindow):
         title_suffix = " *" if state.is_dirty else ""
         self.setWindowTitle(
             f"{state.project_name}{title_suffix} — Movie Maker Reproduction · "
-            "W-02 미디어 · 인터랙티브 목업"
+            "W-04 타임라인 편집 · 재생·출력 인터랙티브 목업"
         )
         self.preview_stack.setCurrentIndex(0 if not state.assets else 1)
         self._refresh_library()
@@ -1516,14 +1516,14 @@ class MainWindow(QMainWindow):
         self._set_action("undo", self.controller.can_undo and not locked, "되돌릴 편집이 없습니다")
         self._set_action("redo", self.controller.can_redo and not locked, "다시 실행할 편집이 없습니다")
         self._actions["undo"].setText(
-            f"실행 취소: {self.controller.undo_label} · 1.0"
+            f"실행 취소: {self.controller.undo_label}"
             if self.controller.undo_label
-            else "실행 취소 · 1.0"
+            else "실행 취소"
         )
         self._actions["redo"].setText(
-            f"다시 실행: {self.controller.redo_label} · 1.0"
+            f"다시 실행: {self.controller.redo_label}"
             if self.controller.redo_label
-            else "다시 실행 · 1.0"
+            else "다시 실행"
         )
         single_clip = len(state.selected_clip_ids) == 1
         can_split = single_clip and clip is not None and self._can_split_clip(clip) and not locked
@@ -1665,7 +1665,7 @@ class MainWindow(QMainWindow):
     def _apply_clip_properties(self) -> None:
         speed_text = self.clip_speed.currentText().replace("×", "")
         speed = float(speed_text)
-        if self.controller.update_selected_clip(
+        self.controller.update_selected_clip(
             duration_ms=round(self.clip_duration.value() * 1_000),
             speed=speed,
             volume=self.clip_volume.value(),
@@ -1674,8 +1674,7 @@ class MainWindow(QMainWindow):
             effect=self.clip_effect.currentText(),
             source_in_ms=round(self.clip_in.value() * 1_000),
             source_out_ms=round(self.clip_out.value() * 1_000),
-        ):
-            self.controller.report_status("클립 속성을 적용했습니다 · 목업")
+        )
 
     def _nudge_trim(self, edge: str) -> None:
         if edge == "start":

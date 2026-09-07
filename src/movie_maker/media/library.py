@@ -28,10 +28,12 @@ from movie_maker.media.thumbnail import (
 from movie_maker.project import (
     CommandError,
     CommandExecutor,
+    HistoryEntry,
     InsertMediaReference,
     MediaKind,
     MediaReference,
     Project,
+    ProjectCommand,
     ProjectValidationError,
     RemoveMediaReference,
 )
@@ -168,6 +170,50 @@ class MediaLibrary:
     @property
     def history_count(self) -> int:
         return self._executor.history_count
+
+    @property
+    def history(self) -> tuple[HistoryEntry, ...]:
+        return self._executor.history
+
+    @property
+    def history_position(self) -> int:
+        return self._executor.history_position
+
+    @property
+    def can_undo(self) -> bool:
+        return self._executor.can_undo
+
+    @property
+    def can_redo(self) -> bool:
+        return self._executor.can_redo
+
+    @property
+    def undo_label(self) -> str | None:
+        return self._executor.undo_label
+
+    @property
+    def redo_label(self) -> str | None:
+        return self._executor.redo_label
+
+    def execute(self, command: ProjectCommand) -> Project:
+        """Commit one project command in the shared media and timeline session."""
+
+        return self._executor.execute(command)
+
+    def undo(self) -> Project:
+        """Undo the previous shared project command."""
+
+        return self._executor.undo()
+
+    def redo(self) -> Project:
+        """Redo the next shared project command."""
+
+        return self._executor.redo()
+
+    def discard_redo(self) -> None:
+        """Discard the shared redo branch after a non-core mock edit."""
+
+        self._executor.discard_redo()
 
     def contains(self, asset_id: str) -> bool:
         return any(media.asset_id == asset_id for media in self.project.media)

@@ -181,6 +181,7 @@ def test_visual_move_and_delete_keep_ids_references_and_auxiliary_absolute_time(
     assert executor.undo() == before_move
     assert executor.redo() == moved
 
+    before_delete = executor.project
     deleted = executor.execute(DeleteTimelineClip("clip-one"))
     assert tuple(clip.clip_id for clip in deleted.track(TrackKind.VISUAL).clips) == (
         "clip-photo",
@@ -189,6 +190,8 @@ def test_visual_move_and_delete_keep_ids_references_and_auxiliary_absolute_time(
     assert deleted.track(TrackKind.VISUAL).clips[1].timeline_start == ProjectTime.from_seconds(5)
     assert deleted.track(TrackKind.MUSIC).clips[0].timeline_start == ProjectTime.from_seconds(7)
     assert deleted.media_reference("one").name == "one.mp4"
+    assert executor.undo() == before_delete
+    assert executor.redo() == deleted
 
 
 def test_video_split_snaps_to_frame_and_round_trips_exactly() -> None:
@@ -232,6 +235,8 @@ def test_audio_split_uses_sample_boundary_and_keeps_absolute_track_position() ->
     assert front.source_out == ProjectTime(3_000_000_000)
     assert back.timeline_start == ProjectTime.from_seconds(5)
     assert back.source_in == front.source_out
+    assert executor.undo().track(TrackKind.MUSIC).clips[0].clip_id == "clip-audio"
+    assert executor.redo() == result
 
 
 def test_split_rejects_photo_edges_short_results_and_duplicate_ids() -> None:
@@ -272,19 +277,21 @@ def test_trim_start_end_and_combined_timing_apply_are_atomic() -> None:
     )
     assert start_trimmed.clip("clip-video").source_in == ProjectTime.from_seconds(1)
 
-    end_trimmed = executor.execute(
-        TrimClipEnd("clip-video", ProjectTime.from_milliseconds(7_010))
+    end_trimmed = _execute_round_trip(
+        executor,
+        TrimClipEnd("clip-video", ProjectTime.from_milliseconds(7_010)),
     )
     assert end_trimmed.clip("clip-video").source_out == ProjectTime.from_seconds(7)
 
     before_count = executor.history_count
-    combined = executor.execute(
+    combined = _execute_round_trip(
+        executor,
         UpdateClipTiming(
             "clip-video",
             source_in=ProjectTime.from_seconds(2),
             source_out=ProjectTime.from_seconds(6),
             playback_rate=PlaybackRate(3, 2),
-        )
+        ),
     )
     clip = combined.clip("clip-video")
     assert clip.source_in == ProjectTime.from_seconds(2)
@@ -323,8 +330,9 @@ def test_photo_duration_and_video_fractional_rate_reflow_visual_track() -> None:
     executor.execute(AddMediaClip("photo", "clip-photo"))
     executor.execute(AddMediaClip("video", "clip-video"))
 
-    photo_changed = executor.execute(
-        SetPhotoDuration("clip-photo", ProjectTime.from_seconds(9))
+    photo_changed = _execute_round_trip(
+        executor,
+        SetPhotoDuration("clip-photo", ProjectTime.from_seconds(9)),
     )
     assert photo_changed.clip("clip-photo").duration == ProjectTime.from_seconds(9)
     assert photo_changed.clip("clip-video").timeline_start == ProjectTime.from_seconds(9)
