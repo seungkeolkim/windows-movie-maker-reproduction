@@ -71,10 +71,11 @@
 | 작업 | 상태 | 구현 및 계약 |
 | --- | --- | --- |
 | `W-01` 프로젝트 코어 | 완료 | [DESIGN-0003](design/design-0003-project-core-contract.md), [프로젝트 코어 소스](../src/movie_maker/project/), [코어 테스트](../tests/project/) |
-| `W-02` 미디어 선택·분석·보관함 | 구현 중 | [DESIGN-0004](design/design-0004-media-library-contract.md), [MOCK-0003 연결 순서](mock/mock-0003-review-log.md#실제-로직-연결-순서) |
+| `W-02` 미디어 선택·분석·보관함 | 완료 | [DESIGN-0004](design/design-0004-media-library-contract.md), [미디어 소스](../src/movie_maker/media/), [미디어 테스트](../tests/media/) |
+| `W-03` 프로젝트 새로 만들기·저장·열기 | 다음 작업 | [MOCK-0003 연결 순서](mock/mock-0003-review-log.md#실제-로직-연결-순서) |
 
 W-03 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순서와 검증 기준은 MOCK-0003을
-따른다.
+따른다. W-02는 DB 없이 W-01 프로젝트와 세션 메모리 썸네일 캐시를 사용한다.
 
 ## 카테고리와 파일명 규칙
 
@@ -117,7 +118,7 @@ W-03 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순�
 | `DESIGN-0001` | 승인됨 | [화면 목록과 레이아웃](design/design-0001-screen-layout.md) |
 | `DESIGN-0002` | 승인됨 | [화면 요소와 상세 기능](design/design-0002-element-functions.md) |
 | `DESIGN-0003` | 승인됨 | [프로젝트 코어 계약](design/design-0003-project-core-contract.md) |
-| `DESIGN-0004` | 검토 중 | [실제 미디어 분석과 보관함 계약](design/design-0004-media-library-contract.md) |
+| `DESIGN-0004` | 승인됨 | [실제 미디어 분석과 보관함 계약](design/design-0004-media-library-contract.md) |
 | `MOCK-0001` | 승인됨 | [목업 동작 및 상태 명세](mock/mock-0001-behavior-specification.md) |
 | `MOCK-0002` | 승인됨 | [인터랙티브 목업 검증 시나리오](mock/mock-0002-validation-scenarios.md) |
 | `MOCK-0003` | 승인됨 | [목업 검토 기록과 UI 기준선](mock/mock-0003-review-log.md) |

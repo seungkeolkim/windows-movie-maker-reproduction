@@ -10,8 +10,8 @@
 
 ## 목적
 
-이 문서는 고정 샘플 데이터로 인터랙티브 목업을 실행하고 MVP와 1.0의 대표 흐름, 빈 상태,
-오류 상태와 반응형 레이아웃을 같은 절차로 다시 검증하기 위한 기준이다. 통과 결과는
+이 문서는 W-02 실제 미디어 보관함과 고정 샘플 데이터를 함께 사용해 MVP·1.0의 대표 흐름,
+빈 상태, 오류 상태와 반응형 레이아웃을 같은 절차로 다시 검증하기 위한 기준이다. 통과 결과는
 [MOCK-0003](mock-0003-review-log.md)에 기록한다.
 
 목업 통과는 실제 미디어 디코딩, 프로젝트 직렬화 또는 MP4 출력이 구현됐다는 뜻이 아니다.
@@ -42,9 +42,9 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 | 책임 | 현재 목업 구현 | 실제 배선 단계의 교체 대상 |
 | --- | --- | --- |
 | 화면과 사용자 의도 전달 | `src/movie_maker/ui/main_window.py` | 유지하며 서비스 호출 어댑터만 교체 |
-| 보조 화면과 대화상자 | `src/movie_maker/ui/dialogs.py` | 운영체제 파일 선택, 장치 및 작업 서비스 연결 |
+| 보조 화면과 대화상자 | `src/movie_maker/ui/dialogs.py` | 프로젝트 파일 선택, 장치 및 작업 서비스 연결 |
 | 고정 샘플 상태 구조 | `src/movie_maker/ui/mock_model.py` | 프로젝트·미디어 도메인 모델 |
-| 가짜 상태 변화와 명령 경계 | `src/movie_maker/ui/mock_controller.py` | 실제 명령 실행기, 저장소, 재생 및 출력 서비스 |
+| 실제 보관함과 가짜 후속 상태의 명령 경계 | `src/movie_maker/ui/mock_controller.py` | 프로젝트 저장소, 타임라인, 재생 및 출력 서비스 |
 | UI 및 상태 회귀 검증 | `tests/ui/` | 실제 서비스 계약 테스트와 함께 유지·확장 |
 
 위젯은 목업 상태를 직접 수정하지 않는다. 사용자 입력은 `MockController`의 의도 메서드로
@@ -56,9 +56,10 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 ## 공통 사전 조건
 
 - 애플리케이션을 새로 실행하면 `제목 없음`, 빈 보관함과 빈 타임라인에서 시작한다.
-- `미디어 가져오기`는 MOCK-0001에 정의한 정상 샘플 다섯 개를 반환한다.
+- `미디어 가져오기`는 운영체제 다중 파일 선택 창에서 선택한 실제 파일을 분석한다.
+- 후속 목업 흐름은 `샘플 편집 프로젝트 불러오기`의 정상 샘플 다섯 개를 사용한다.
 - `프로젝트 열기`와 `샘플 편집 프로젝트 불러오기`는 19초짜리 `제주 여행 목업`을 연다.
-- 실제 원본, 프로젝트 파일과 MP4 파일은 만들거나 변경하지 않는다.
+- 선택한 원본은 읽기만 하며 프로젝트 파일과 MP4 파일은 아직 만들지 않는다.
 - 정상 흐름과 오류 흐름 모두 현재 프로젝트의 편집 상태를 잃지 않아야 한다.
 
 ## MVP 핵심 흐름
@@ -70,19 +71,19 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 1. 새 목업을 실행하거나 `빈 프로젝트로 초기화`한다.
 2. 시작 화면, 보관함, 타임라인과 비활성화된 출력 명령을 확인한다.
 3. 시작 화면의 `미디어 가져오기`를 누른다.
-4. 전체·영상·사진·오디오 필터를 차례로 선택한다.
-5. 1.0 파일 드롭 경로가 같은 샘플 가져오기와 검증 결과를 사용하는지 확인한다.
+4. 지원되는 영상·사진·오디오를 운영체제 창에서 함께 선택한다.
+5. 전체·영상·사진·오디오 필터를 차례로 선택한다.
 
 합격 기준:
 
 - 시작 화면에서 가져오기가 가장 강조되고 새 프로젝트와 열기는 보조 행동이다.
-- 다섯 항목이 종류, 이름, 길이 또는 사진 표시, 상태와 함께 구분된다.
+- 성공 항목이 종류, 이름, 길이 또는 사진 표시, 상태와 썸네일로 구분된다.
 - 필터는 실제 보관함과 숨겨진 선택을 변경하지 않는다.
-- 파일 드롭도 중복 항목을 만들지 않고 목업 대체 결과임을 상태에 표시한다.
-- 가져오기 결과, 수정됨 상태와 다음 행동이 즉시 표시된다.
+- 원본 파일의 내용, 크기와 수정 시간은 바뀌지 않는다.
+- 가져오기 결과, 수정됨 상태와 다음 행동이 즉시 표시되며 취소는 상태를 바꾸지 않는다.
 
-자동 검증: `test_start_import_switches_to_editing_workspace`,
-`test_sample_import_is_idempotent_and_recorded_as_one_edit`,
+자동 검증: `test_default_selector_uses_native_multi_file_dialog`,
+`test_main_window_import_action_uses_selected_files_and_shows_failures`,
 `test_library_filter_keeps_selection_state_but_changes_visible_items`.
 
 ### V-MVP-02: 고정 트랙 배치와 원본 화면 결정
@@ -168,17 +169,18 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 연결 기능: `F-MEDIA-04`, `F-TIMELINE-03`.
 
 1. 타임라인에서 사용하지 않는 항목을 보관함에서 제거한다.
-2. 사용 중인 기준 미디어를 제거하고 영향 확인을 취소한다.
-3. 다시 시도하여 제거를 승인한다.
+2. 사용 중인 기준 미디어 제거를 시도한다.
+3. 관련 클립 수와 클립을 먼저 제거하라는 안내를 확인한다.
 
 합격 기준:
 
 - 미사용 항목은 즉시 보관함에서만 제거된다.
-- 사용 중 항목은 관련 클립 수와 원본 파일을 삭제하지 않는다는 사실을 먼저 알린다.
-- 기준 미디어를 제거해도 이미 고정된 프로젝트 화면 1920×1080은 바뀌지 않는다.
-- 제거 결과를 실행 취소할 수 있다.
+- 사용 중 항목은 관련 클립 수를 알리고 제거를 거부한다.
+- 성공과 거부 모두 컴퓨터의 원본 파일 내용과 메타데이터를 바꾸지 않는다.
+- 성공한 제거는 W-01 명령 이력에 기록된다.
 
-자동 검증: `test_removing_used_reference_keeps_canvas_but_removes_related_clips`.
+자동 검증: `test_unused_real_item_removal_keeps_source_file_and_removes_core_reference`,
+`test_used_real_item_removal_is_refused_with_impact_count`.
 
 ### V-MVP-07: 미리 보기와 탐색
 
@@ -321,17 +323,19 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 
 연결 기능: `F-MEDIA-03`, `09`, `F-EXPERIENCE-02`.
 
-1. `가져오기 부분 실패 표시`를 실행한다.
-2. 성공 항목과 오류 항목, 보관함 경고를 확인한다.
-3. 문제 있음 필터를 선택한다.
+1. 정상 영상·사진·오디오, 손상 파일과 미지원 파일을 한 번에 선택한다.
+2. 성공 항목과 파일별 실패 이유, 썸네일 결과를 확인한다.
+3. 성공 파일 하나를 다시 선택해 중복 건너뜀을 확인한다.
 
 합격 기준:
 
 - 한 파일의 실패가 정상 항목을 제거하지 않는다.
-- 오류 항목은 이름, 오류 배지와 실패 이유를 유지한다.
+- 오류 결과는 파일명과 실패 이유를 유지하고 유효하지 않은 프로젝트 항목을 만들지 않는다.
+- 썸네일 실패는 미디어 항목을 유지하고 기본 아이콘과 경고를 표시한다.
 - 보관함 전체가 비었다는 상태와 필터 결과가 없다는 상태를 구분한다.
 
-자동 검증: `test_missing_media_and_partial_failure_remain_visible_and_recoverable`.
+자동 검증: `test_mixed_batch_keeps_video_photo_audio_successes_and_file_failures`,
+`test_main_window_import_action_uses_selected_files_and_shows_failures`.
 
 ### V-ERROR-03: 출력 실패와 재시도
 
