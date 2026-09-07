@@ -415,8 +415,24 @@ class Project:
                         raise ProjectValidationError("Timed media clips require a source end.")
                     if source.duration is not None and clip.source_out > source.duration:
                         raise ProjectValidationError("Clip source range exceeds the media duration.")
-                elif clip.source_in != ZERO_TIME or clip.source_out is not None:
-                    raise ProjectValidationError("Photo clips cannot define a source range.")
+                    source_seconds = (
+                        clip.source_out - clip.source_in
+                    ).to_fractional_seconds()
+                    expected_duration = ProjectTime.from_seconds(
+                        source_seconds / clip.playback_rate.fraction
+                    )
+                    if clip.duration != expected_duration:
+                        raise ProjectValidationError(
+                            "Timed clip duration must equal source span divided by playback rate."
+                        )
+                elif (
+                    clip.source_in != ZERO_TIME
+                    or clip.source_out is not None
+                    or clip.playback_rate != NORMAL_PLAYBACK_RATE
+                ):
+                    raise ProjectValidationError(
+                        "Photo clips cannot define a source range or playback rate."
+                    )
 
             if track.kind is TrackKind.VISUAL:
                 for clip in track.clips:
