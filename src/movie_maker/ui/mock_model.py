@@ -45,7 +45,7 @@ class ExportState(str, Enum):
 
 @dataclass(slots=True)
 class MockAsset:
-    """A library item; no real file is read by the mock-up."""
+    """A library presentation item for real W-02 media or later-stage mock data."""
 
     asset_id: str
     name: str
@@ -58,6 +58,9 @@ class MockAsset:
     status: AssetStatus = AssetStatus.READY
     proxy_enabled: bool = False
     proxy_status: str = "사용 안 함"
+    thumbnail_png: bytes | None = None
+    thumbnail_error: str | None = None
+    is_real_media: bool = False
 
     @property
     def resolution_text(self) -> str:

@@ -6,9 +6,14 @@ from movie_maker.ui.main_window import MainWindow
 from movie_maker.ui.mock_model import ExportState
 
 
-def test_start_import_switches_to_editing_workspace(qtbot) -> None:
-    window = MainWindow()
+def test_start_import_switches_to_editing_workspace(qtbot, monkeypatch) -> None:
+    window = MainWindow(media_file_selector=lambda: ("C:/Media/selected.mp4",))
     qtbot.addWidget(window)
+    monkeypatch.setattr(
+        window.controller,
+        "import_media_files",
+        lambda _paths: window.controller.import_sample_media(),
+    )
     window.show()
     start_button = window.findChild(QPushButton, "E-START-IMPORT")
 
@@ -23,7 +28,7 @@ def test_start_import_switches_to_editing_workspace(qtbot) -> None:
 
 
 def test_library_filter_keeps_selection_state_but_changes_visible_items(qtbot) -> None:
-    window = MainWindow()
+    window = MainWindow(media_file_selector=lambda: ())
     qtbot.addWidget(window)
     window.controller.import_sample_media()
     window.show()
@@ -34,7 +39,7 @@ def test_library_filter_keeps_selection_state_but_changes_visible_items(qtbot) -
     assert window.library_list.count() == 2
     assert all("오디오" in window.library_list.item(index).text() for index in range(2))
 
-    window._import_sample_media()
+    window._import_media()
 
     assert window.library_filter.currentText() == "전체"
     assert window.library_list.count() == 5

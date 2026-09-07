@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from importlib.metadata import version
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer, qVersion
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDockWidget,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from movie_maker.media import AUDIO_EXTENSIONS, PHOTO_EXTENSIONS, VIDEO_EXTENSIONS
 from movie_maker.ui.dialogs import (
     DecisionDialog,
     ExportSettingsDialog,
@@ -69,17 +71,40 @@ from movie_maker.ui.mock_model import (
     TrackKind,
 )
 
+MediaFileSelector = Callable[[], Sequence[str]]
+
+
+def _file_patterns(extensions: frozenset[str]) -> str:
+    return " ".join(f"*{extension}" for extension in sorted(extensions))
+
+
+MEDIA_FILE_FILTER = ";;".join(
+    (
+        f"지원 미디어 ({_file_patterns(VIDEO_EXTENSIONS | PHOTO_EXTENSIONS | AUDIO_EXTENSIONS)})",
+        f"영상 ({_file_patterns(VIDEO_EXTENSIONS)})",
+        f"사진 ({_file_patterns(PHOTO_EXTENSIONS)})",
+        f"오디오 ({_file_patterns(AUDIO_EXTENSIONS)})",
+        "모든 파일 (*)",
+    )
+)
+
 
 class MainWindow(QMainWindow):
     """S-EDITOR interactive mock-up using only deterministic in-memory state."""
 
-    def __init__(self, controller: MockController | None = None) -> None:
+    def __init__(
+        self,
+        controller: MockController | None = None,
+        *,
+        media_file_selector: MediaFileSelector | None = None,
+    ) -> None:
         super().__init__()
         self.setObjectName("S-EDITOR")
         self.setAcceptDrops(True)
         self.setMinimumSize(1024, 640)
         self.resize(1440, 900)
         self.controller = controller or MockController()
+        self._media_file_selector = media_file_selector or self._choose_media_files
         self._allow_close = False
         self._showing_transition = False
         self._responsive_hidden_inspector = False
@@ -147,8 +172,8 @@ class MainWindow(QMainWindow):
         heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(heading)
         description = QLabel(
-            "샘플 미디어를 가져와 배치, 편집, 저장과 MP4 출력 흐름을 확인할 수 있습니다.\n"
-            "모든 파일과 재생 결과는 고정된 목업 데이터입니다."
+            "로컬 영상, 사진과 오디오를 가져와 미디어 보관함을 만들 수 있습니다.\n"
+            "가져오기와 분석은 실제 파일을 사용하며 타임라인 이후 기능은 목업입니다."
         )
         description.setObjectName("secondaryText")
         description.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -160,7 +185,7 @@ class MainWindow(QMainWindow):
         import_button.setObjectName("E-START-IMPORT")
         import_button.setProperty("primary", True)
         import_button.setMinimumHeight(42)
-        import_button.clicked.connect(self._import_sample_media)
+        import_button.clicked.connect(self._import_media)
         button_row.addWidget(import_button)
         open_button = QPushButton("프로젝트 열기")
         open_button.setObjectName("E-START-OPEN")
@@ -388,8 +413,8 @@ class MainWindow(QMainWindow):
         header.addStretch()
         import_button = QPushButton("＋ 가져오기")
         import_button.setObjectName("E-LIBRARY-IMPORT")
-        import_button.setToolTip("샘플 영상, 사진과 오디오 가져오기 (Ctrl+I)")
-        import_button.clicked.connect(self._import_sample_media)
+        import_button.setToolTip("로컬 영상, 사진과 오디오 파일 선택 (Ctrl+I)")
+        import_button.clicked.connect(self._import_media)
         header.addWidget(import_button)
         layout.addLayout(header)
         self.library_filter = QComboBox()
@@ -791,7 +816,7 @@ class MainWindow(QMainWindow):
             ),
             "import": self._action(
                 "미디어 가져오기…",
-                self._import_sample_media,
+                self._import_media,
                 "Ctrl+I",
             ),
             "remove_asset": self._action("보관함에서 제거", self._request_remove_asset),
@@ -1017,16 +1042,32 @@ class MainWindow(QMainWindow):
         pixmap.fill(QColor(asset.color))
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QColor("#ffffff"))
-        font = painter.font()
-        font.setBold(True)
-        font.setPointSize(12)
-        painter.setFont(font)
-        symbol = {MediaKind.VIDEO: "VIDEO", MediaKind.PHOTO: "PHOTO", MediaKind.AUDIO: "AUDIO"}[
-            asset.kind
-        ]
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, symbol)
-        if asset.status is not AssetStatus.READY:
+        thumbnail = QPixmap()
+        loaded_thumbnail = asset.thumbnail_png is not None and thumbnail.loadFromData(
+            asset.thumbnail_png
+        )
+        if loaded_thumbnail:
+            scaled = thumbnail.scaled(
+                size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            left = (size.width() - scaled.width()) // 2
+            top = (size.height() - scaled.height()) // 2
+            painter.drawPixmap(left, top, scaled)
+        else:
+            painter.setPen(QColor("#ffffff"))
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(12)
+            painter.setFont(font)
+            symbol = {
+                MediaKind.VIDEO: "VIDEO",
+                MediaKind.PHOTO: "PHOTO",
+                MediaKind.AUDIO: "AUDIO",
+            }[asset.kind]
+            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, symbol)
+        if asset.status is not AssetStatus.READY or asset.thumbnail_error is not None:
             painter.setBrush(QColor("#c73d4d"))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(size.width() - 28, 6, 22, 22)
@@ -1042,7 +1083,8 @@ class MainWindow(QMainWindow):
         state = self.controller.state
         title_suffix = " *" if state.is_dirty else ""
         self.setWindowTitle(
-            f"{state.project_name}{title_suffix} — Movie Maker Reproduction · 인터랙티브 목업"
+            f"{state.project_name}{title_suffix} — Movie Maker Reproduction · "
+            "W-02 미디어 · 인터랙티브 목업"
         )
         self.preview_stack.setCurrentIndex(0 if not state.assets else 1)
         self._refresh_library()
@@ -1059,7 +1101,7 @@ class MainWindow(QMainWindow):
         )
         self.status_summary.setText(
             f"길이 {format_time(state.total_duration_ms)} · "
-            f"{background_summary} · 목업 데이터"
+            f"{background_summary} · 미디어 보관함 실제 분석 · 편집 목업"
         )
         if state.is_playing and not self._preview_timer.isActive():
             self._preview_timer.start()
@@ -1075,7 +1117,10 @@ class MainWindow(QMainWindow):
         visible_count = 0
         for asset in state.assets.values():
             if selected_filter == "문제 있음":
-                visible = asset.status is not AssetStatus.READY
+                visible = (
+                    asset.status is not AssetStatus.READY
+                    or asset.thumbnail_error is not None
+                )
             elif selected_filter == "전체":
                 visible = True
             else:
@@ -1084,15 +1129,24 @@ class MainWindow(QMainWindow):
                 continue
             visible_count += 1
             duration = "사진" if asset.duration_ms is None else format_time(asset.duration_ms)
-            status = "" if asset.status is AssetStatus.READY else f"\n⚠ {asset.status.value}"
+            if asset.status is not AssetStatus.READY:
+                status = f"\n⚠ {asset.status.value}"
+            elif asset.thumbnail_error is not None:
+                status = "\n⚠ 썸네일 없음"
+            else:
+                status = ""
             item = QListWidgetItem(
                 self._media_icon(asset, QSize(150, 70)),
                 f"{asset.name}\n{asset.kind.value} · {duration}{status}",
             )
             item.setData(Qt.ItemDataRole.UserRole, asset.asset_id)
-            item.setToolTip(
-                f"{asset.name}\n{asset.resolution_text}\n{asset.source_path}\n상태: {asset.status.value}"
+            tooltip = (
+                f"{asset.name}\n{asset.resolution_text}\n{asset.source_path}\n"
+                f"상태: {asset.status.value}"
             )
+            if asset.thumbnail_error is not None:
+                tooltip += f"\n썸네일: {asset.thumbnail_error}"
+            item.setToolTip(tooltip)
             self.library_list.addItem(item)
             if asset.asset_id == selected_id:
                 self.library_list.setCurrentItem(item)
@@ -1722,8 +1776,17 @@ class MainWindow(QMainWindow):
     def _request_open_project(self) -> None:
         self._guard_unsaved(self.controller.load_sample_project)
 
-    def _import_sample_media(self) -> None:
-        self.controller.import_sample_media()
+    def _choose_media_files(self) -> Sequence[str]:
+        files, _selected_filter = QFileDialog.getOpenFileNames(
+            self,
+            "미디어 가져오기",
+            "",
+            MEDIA_FILE_FILTER,
+        )
+        return files
+
+    def _import_media(self) -> None:
+        self.controller.import_media_files(tuple(self._media_file_selector()))
         self.library_filter.setCurrentText("전체")
 
     def _request_remove_asset(self) -> None:
@@ -1735,16 +1798,17 @@ class MainWindow(QMainWindow):
         if usage_count == 0:
             self.controller.remove_selected_asset()
             return
+        self.controller.remove_selected_asset()
         dialog = DecisionDialog(
             title="사용 중인 미디어 제거",
-            heading=f"‘{asset.name}’을 보관함에서 제거할까요?",
+            heading=f"‘{asset.name}’은 아직 제거할 수 없습니다",
             body=(
-                f"타임라인의 관련 클립 {usage_count}개도 목업 프로젝트에서 제거됩니다. "
-                "컴퓨터의 원본 파일은 삭제하지 않습니다."
+                f"타임라인의 관련 클립 {usage_count}개가 이 파일을 사용하고 있습니다. "
+                "관련 클립을 먼저 제거한 뒤 다시 시도하세요. 컴퓨터의 원본 파일은 "
+                "변경되지 않았습니다."
             ),
             actions=[
-                ("보관함과 타임라인에서 제거", self.controller.remove_selected_asset, False),
-                ("취소", lambda: None, True),
+                ("확인", lambda: None, True),
             ],
             parent=self,
         )
@@ -1841,20 +1905,14 @@ class MainWindow(QMainWindow):
     # Native window events and presentation
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+        event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:
         if event.mimeData().hasUrls():
-            self._import_sample_media()
             self.controller.report_status(
-                "파일 드롭 경로를 확인했습니다 · 샘플 미디어로 대체한 목업"
+                "드래그 앤 드롭 가져오기는 1.0 범위입니다 · 가져오기 버튼을 사용하세요"
             )
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+        event.ignore()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._allow_close or not self.controller.state.is_dirty:

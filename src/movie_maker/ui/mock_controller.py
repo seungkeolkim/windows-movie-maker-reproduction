@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from itertools import count
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
+from movie_maker.media import (
+    ImportedMedia,
+    MediaImportReport,
+    MediaLibrary,
+    MediaRemovalFailure,
+)
+from movie_maker.project import MediaKind as CoreMediaKind
+from movie_maker.project import Project
 from movie_maker.ui.mock_model import (
     AssetStatus,
     ExportState,
@@ -18,6 +27,17 @@ from movie_maker.ui.mock_model import (
     MockProjectState,
     TrackKind,
 )
+
+CORE_TO_UI_MEDIA_KIND = {
+    CoreMediaKind.VIDEO: MediaKind.VIDEO,
+    CoreMediaKind.PHOTO: MediaKind.PHOTO,
+    CoreMediaKind.AUDIO: MediaKind.AUDIO,
+}
+MEDIA_COLORS = {
+    CoreMediaKind.VIDEO: "#2f79b9",
+    CoreMediaKind.PHOTO: "#4d8a66",
+    CoreMediaKind.AUDIO: "#8563b8",
+}
 
 
 def _sample_assets() -> dict[str, MockAsset]:
@@ -78,6 +98,26 @@ def _sample_assets() -> dict[str, MockAsset]:
     return {asset.asset_id: asset for asset in assets}
 
 
+def _source_name(source_path: str) -> str:
+    return Path(source_path).name or source_path
+
+
+def _import_warning_text(report: MediaImportReport) -> str | None:
+    lines: list[str] = []
+    for import_failure in report.failures:
+        lines.append(
+            f"실패 · {_source_name(import_failure.source_path)}: {import_failure.message}"
+        )
+    for duplicate in report.duplicates:
+        lines.append(f"중복 · {_source_name(duplicate.source_path)}: {duplicate.message}")
+    for thumbnail_failure in report.thumbnail_failures:
+        lines.append(
+            "썸네일 · "
+            f"{_source_name(thumbnail_failure.source_path)}: {thumbnail_failure.message}"
+        )
+    return "\n".join(lines) or None
+
+
 class MockController(QObject):
     """Own mock state and expose user intents independently of Qt widgets."""
 
@@ -85,9 +125,10 @@ class MockController(QObject):
     status_changed = Signal(str)
     export_changed = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, media_library: MediaLibrary | None = None) -> None:
         super().__init__()
         self.state = MockProjectState()
+        self._media_library = media_library or MediaLibrary.create_default()
         self._history: list[MockHistoryEntry] = []
         self._history_position = 0
         self._id_counter = count(1)
@@ -99,6 +140,18 @@ class MockController(QObject):
     @property
     def history_count(self) -> int:
         return len(self._history)
+
+    @property
+    def media_project(self) -> Project:
+        """Return the W-01 project currently backing real W-02 library items."""
+
+        return self._media_library.project
+
+    @property
+    def media_history_count(self) -> int:
+        """Return successful real media commands in this project session."""
+
+        return self._media_library.history_count
 
     @property
     def can_undo(self) -> bool:
@@ -207,6 +260,7 @@ class MockController(QObject):
         self._history_position = 0
 
     def new_project(self) -> None:
+        self._media_library.reset()
         self.state = MockProjectState(status_message="새 프로젝트를 만들었습니다 · 목업")
         self._reset_history()
         self._publish()
@@ -231,7 +285,71 @@ class MockController(QObject):
 
         self._execute_edit(f"{len(added)}개 미디어 가져오기", operation)
 
+    def import_media_files(self, source_paths: Sequence[str]) -> MediaImportReport:
+        """Analyze selected local files and publish their project-backed library views."""
+
+        report = self._media_library.import_paths(source_paths)
+        if report.cancelled:
+            self._set_status("미디어 가져오기를 취소했습니다")
+            self.state_changed.emit()
+            return report
+
+        for imported in report.imported:
+            asset = self._asset_view(imported)
+            self.state.assets[asset.asset_id] = asset
+
+        selected_id: str | None = None
+        if report.imported:
+            selected_id = report.imported[0].reference.asset_id
+            self.state.is_dirty = True
+        elif report.duplicates:
+            selected_id = report.duplicates[0].existing_asset_id
+        if selected_id in self.state.assets:
+            self.state.selected_asset_id = selected_id
+            self.state.selected_clip_id = None
+            self.state.selected_clip_ids.clear()
+
+        self.state.import_warning = _import_warning_text(report)
+        summary: list[str] = []
+        if report.imported:
+            summary.append(f"{len(report.imported)}개 가져오기 성공")
+        if report.failures:
+            summary.append(f"{len(report.failures)}개 실패")
+        if report.duplicates:
+            summary.append(f"{len(report.duplicates)}개 중복 건너뜀")
+        if report.thumbnail_failures:
+            summary.append(f"썸네일 {len(report.thumbnail_failures)}개 기본 아이콘 사용")
+        self.state.status_message = " · ".join(summary) or "가져올 미디어가 없습니다"
+        self._publish()
+        return report
+
+    def _asset_view(self, imported: ImportedMedia) -> MockAsset:
+        reference = imported.reference
+        thumbnail_failure = self._media_library.thumbnail_failure(reference.asset_id)
+        return MockAsset(
+            asset_id=reference.asset_id,
+            name=reference.name,
+            kind=CORE_TO_UI_MEDIA_KIND[reference.kind],
+            duration_ms=(
+                reference.duration.to_milliseconds()
+                if reference.duration is not None
+                else None
+            ),
+            width=reference.width,
+            height=reference.height,
+            color=MEDIA_COLORS[reference.kind],
+            source_path=reference.source_path,
+            thumbnail_png=(
+                imported.thumbnail.png_bytes if imported.thumbnail is not None else None
+            ),
+            thumbnail_error=(
+                thumbnail_failure.message if thumbnail_failure is not None else None
+            ),
+            is_real_media=True,
+        )
+
     def load_sample_project(self) -> None:
+        self._media_library.reset()
         assets = _sample_assets()
         state = MockProjectState(
             project_name="제주 여행 목업",
@@ -449,20 +567,39 @@ class MockController(QObject):
             return False
         usage_count = self.asset_usage_count(asset.asset_id)
 
-        def operation() -> None:
-            for track in TrackKind:
-                clips = self.clips_for_track(track)
-                clips[:] = [clip for clip in clips if clip.asset_id != asset.asset_id]
-            self.state.transitions = {
-                boundary: value
-                for boundary, value in self.state.transitions.items()
-                if all(clip_id in {clip.clip_id for clip in self.state.visual_clips}
-                       for clip_id in boundary.split("|"))
-            }
+        if usage_count:
+            self._set_status(
+                f"타임라인에서 사용 중인 미디어는 제거할 수 없습니다 · "
+                f"관련 클립 {usage_count}개를 먼저 제거하세요"
+            )
+            self.state_changed.emit()
+            return False
+
+        if self._media_library.contains(asset.asset_id):
+            result = self._media_library.remove(asset.asset_id)
+            if isinstance(result, MediaRemovalFailure):
+                suffix = (
+                    f" · 관련 클립 {result.usage_count}개"
+                    if result.usage_count
+                    else ""
+                )
+                self._set_status(f"{result.message}{suffix}")
+                self.state_changed.emit()
+                return False
             del self.state.assets[asset.asset_id]
             self.state.selected_asset_id = None
-        suffix = f" · 관련 클립 {usage_count}개 함께 제거" if usage_count else ""
-        self._execute_edit(f"보관함에서 제거{suffix}", operation)
+            self.state.is_dirty = True
+            self.state.status_message = (
+                "보관함에서 미디어를 제거했습니다 · 컴퓨터의 원본 파일은 유지됩니다"
+            )
+            self._publish()
+            return True
+
+        def operation() -> None:
+            del self.state.assets[asset.asset_id]
+            self.state.selected_asset_id = None
+
+        self._execute_edit("보관함에서 제거", operation)
         return True
 
     def inject_missing_media(self) -> None:

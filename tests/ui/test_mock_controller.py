@@ -113,19 +113,23 @@ def test_speed_change_uses_source_span_and_property_apply_is_one_command() -> No
     assert controller.history_count == before + 1
 
 
-def test_removing_used_reference_keeps_canvas_but_removes_related_clips() -> None:
+def test_removing_used_reference_is_rejected_without_changing_timeline() -> None:
     controller = MockController()
     controller.load_sample_project()
     controller.select_asset("media-beach")
 
     assert controller.asset_usage_count("media-beach") == 1
-    assert controller.remove_selected_asset()
+    before_assets = dict(controller.state.assets)
+    before_clips = list(controller.state.all_clips)
 
-    assert "media-beach" not in controller.state.assets
-    assert all(clip.asset_id != "media-beach" for clip in controller.state.all_clips)
+    assert not controller.remove_selected_asset()
+
+    assert controller.state.assets == before_assets
+    assert controller.state.all_clips == before_clips
     assert controller.state.reference_asset_id == "media-beach"
     assert (controller.state.canvas_width, controller.state.canvas_height) == (1920, 1080)
-    assert controller.state.total_duration_ms == 11_000
+    assert controller.state.total_duration_ms == 19_000
+    assert "관련 클립 1개" in controller.state.status_message
 
 
 def test_missing_media_and_partial_failure_remain_visible_and_recoverable() -> None:
