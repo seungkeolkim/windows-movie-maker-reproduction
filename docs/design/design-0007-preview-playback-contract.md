@@ -137,8 +137,25 @@ FFmpeg 실행은 제한된 작업자 스레드에서 수행하고 Qt UI 스레�
 
 ## 완료 조건
 
-- [ ] 실제 영상·사진 프레임이 UI 스레드를 장시간 차단하지 않고 표시된다.
-- [ ] 재생·탐색·프레임 이동과 편집 직후 갱신이 하나의 정확한 시간축을 사용한다.
-- [ ] 최신 요청, 취소·종료와 타입이 있는 오류 계약이 구현된다.
-- [ ] 필수 자동 검증과 전체 회귀가 통과한다.
-- [ ] README와 문서 지도에 W-05 완료 및 W-06 다음 작업을 기록한다.
+- [x] 실제 영상·사진 프레임이 UI 스레드를 장시간 차단하지 않고 표시된다.
+- [x] 재생·탐색·프레임 이동과 편집 직후 갱신이 하나의 정확한 시간축을 사용한다.
+- [x] 최신 요청, 취소·종료와 타입이 있는 오류 계약이 구현된다.
+- [x] 필수 자동 검증과 전체 회귀가 통과한다.
+- [x] README와 문서 지도에 W-05 완료 및 W-06 다음 작업을 기록한다.
+
+## 구현 결과
+
+| 계약 | 구현 | 자동 검증 |
+| --- | --- | --- |
+| 프로젝트·source 시간 매핑과 프레임 이동 | `src/movie_maker/preview/timeline.py` | `tests/preview/test_timeline.py` |
+| 취소 가능한 FFmpeg PNG 프레임 | `src/movie_maker/preview/decoder.py` | `tests/preview/test_decoder.py`, `test_real_media.py` |
+| 최신 요청·캐시·종료 정리 | `src/movie_maker/preview/coordinator.py` | `tests/preview/test_coordinator.py` |
+| Qt 프레임 표시·재생·탐색·Space | `src/movie_maker/ui/preview.py`, `main_window.py` | `tests/ui/test_preview_playback_integration.py` |
+
+실제 24000/1001fps H.264 테스트 프레임을 표시한 화면은
+[W-05 1280×720 캡처](../mock/screenshots/editor-preview-actual-1280x720.png)에 남긴다.
+
+W-05 완료 시 전체 160개 pytest 테스트가 통과했다. Ruff, strict mypy, 애플리케이션 `--check`와
+`git diff --check`도 통과했다. 실제 FFmpeg 9 환경에서 24000/1001fps H.264 영상과 PNG 사진을
+생성·분석·디코딩하고 전후 SHA-256, 크기와 수정 시간이 같은지 검증했다. 오디오 미리 듣기와
+믹싱은 `W-06`, MP4 출력은 `W-07`의 다음 서비스 경계로 남는다.
