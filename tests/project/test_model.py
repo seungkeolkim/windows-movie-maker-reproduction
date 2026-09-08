@@ -147,6 +147,34 @@ def test_project_rejects_source_ranges_outside_media() -> None:
         _project_with_video(too_long)
 
 
+def test_project_rejects_inconsistent_timed_duration_and_photo_playback_rate() -> None:
+    inconsistent = replace(_visual_clip(), duration=ProjectTime.from_seconds(4))
+    with pytest.raises(ProjectValidationError, match="source span"):
+        _project_with_video(inconsistent)
+
+    photo = MediaReference(
+        asset_id="photo",
+        name="사진.jpg",
+        source_path="D:/Media/사진.jpg",
+        kind=MediaKind.PHOTO,
+        duration=None,
+        width=1920,
+        height=1080,
+    )
+    photo_clip = replace(
+        _visual_clip(),
+        asset_id=photo.asset_id,
+        playback_rate=PlaybackRate(2, 1),
+    )
+    project = Project.empty(project_id="project-photo")
+    tracks = (
+        TimelineTrack(TrackKind.VISUAL, (photo_clip,)),
+        *project.tracks[1:],
+    )
+    with pytest.raises(ProjectValidationError, match="Photo clips"):
+        replace(project, media=(photo,), tracks=tracks)
+
+
 def test_media_and_canvas_validate_dimensions_and_types() -> None:
     with pytest.raises(ProjectValidationError, match="present together"):
         replace(_video(), height=None)

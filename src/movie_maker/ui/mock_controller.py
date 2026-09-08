@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from fractions import Fraction
 from itertools import count
 from pathlib import Path
@@ -20,16 +21,26 @@ from movie_maker.media import (
 from movie_maker.project import (
     Canvas,
     Clip,
+    CommandError,
     MediaReference,
     PlaybackRate,
     Project,
+    ProjectCommand,
     ProjectFileStore,
     ProjectPersistenceError,
     ProjectTime,
+    RenameProject,
     TimelineTrack,
 )
 from movie_maker.project.model import MediaKind as CoreMediaKind
 from movie_maker.project.model import TrackKind as CoreTrackKind
+from movie_maker.timeline import (
+    AddMediaClip,
+    DeleteTimelineClip,
+    MoveVisualClip,
+    SplitClip,
+    UpdateClipTiming,
+)
 from movie_maker.ui.mock_model import (
     AssetStatus,
     ExportState,
@@ -59,6 +70,13 @@ CORE_TO_UI_TRACK_KIND = {
     CoreTrackKind.TEXT: TrackKind.TEXT,
 }
 UI_TO_CORE_TRACK_KIND = {value: key for key, value in CORE_TO_UI_TRACK_KIND.items()}
+
+
+@dataclass(slots=True)
+class _ControllerHistoryEntry:
+    label: str
+    core: bool
+    mock: MockHistoryEntry | None = None
 
 
 def _sample_assets() -> dict[str, MockAsset]:
@@ -150,15 +168,20 @@ class MockController(QObject):
         self,
         media_library: MediaLibrary | None = None,
         project_store: ProjectFileStore | None = None,
+        *,
+        clip_id_factory: Callable[[], str] | None = None,
     ) -> None:
         super().__init__()
         self.state = MockProjectState()
         self._media_library = media_library or MediaLibrary.create_default()
         self._project_store = project_store or ProjectFileStore()
         self.last_persistence_error: str | None = None
-        self._history: list[MockHistoryEntry] = []
+        self._history: list[_ControllerHistoryEntry] = []
         self._history_position = 0
         self._id_counter = count(1)
+        self._clip_id_factory = clip_id_factory
+        self._saved_project = self._media_library.project
+        self._sync_from_core(self._media_library.project)
 
     @property
     def history_position(self) -> int:
@@ -244,6 +267,14 @@ class MockController(QObject):
             if candidate not in existing:
                 return candidate
 
+    def _next_clip_id(self) -> str:
+        if self._clip_id_factory is None:
+            return self._next_id("clip")
+        candidate = self._clip_id_factory()
+        if not isinstance(candidate, str) or not candidate.strip():
+            raise ValueError("클립 ID 생성기가 비어 있지 않은 문자열을 반환해야 합니다.")
+        return candidate
+
     def _publish(self) -> None:
         self.state_changed.emit()
         self.status_changed.emit(self.state.status_message)
@@ -267,9 +298,36 @@ class MockController(QObject):
         self.state.status_message = f"{label} · 목업"
         after = deepcopy(self.state)
         del self._history[self._history_position :]
-        self._history.append(MockHistoryEntry(label, before, after))
+        self._media_library.discard_redo()
+        self._history.append(
+            _ControllerHistoryEntry(
+                label,
+                core=False,
+                mock=MockHistoryEntry(label, before, after),
+            )
+        )
         self._history_position = len(self._history)
         self._publish()
+
+    def _record_core_history(self, previous_position: int) -> None:
+        del self._history[self._history_position :]
+        for entry in self._media_library.history[previous_position:]:
+            self._history.append(_ControllerHistoryEntry(entry.label, core=True))
+        self._history_position = len(self._history)
+
+    def _execute_core(self, command: ProjectCommand, success_message: str) -> Project | None:
+        previous_position = self._media_library.history_position
+        try:
+            project = self._media_library.execute(command)
+        except (CommandError, TypeError, ValueError) as error:
+            self._set_status(f"편집할 수 없습니다 · {error}")
+            return None
+        self._record_core_history(previous_position)
+        self._sync_from_core(project)
+        self.state.is_dirty = project != self._saved_project
+        self.state.status_message = success_message
+        self._publish()
+        return project
 
     def _normalise_timeline(self) -> None:
         cursor = 0
@@ -295,6 +353,7 @@ class MockController(QObject):
         project = Project.empty(project_id=str(uuid4()))
         self._media_library.reset(project)
         self.state = MockProjectState(status_message="새 프로젝트를 만들었습니다")
+        self._saved_project = project
         self.last_persistence_error = None
         self._reset_history()
         self._publish()
@@ -444,6 +503,104 @@ class MockController(QObject):
             state.status_message = f"프로젝트를 열었습니다 · 누락 미디어 {missing_count}개"
         return state
 
+    def _sync_from_core(self, project: Project) -> None:
+        """Project persistent fields into the existing Qt presentation state."""
+
+        previous_assets = self.state.assets
+        assets: dict[str, MockAsset] = {}
+        for media in project.media:
+            existing = previous_assets.get(media.asset_id)
+            if existing is None:
+                thumbnail = self._media_library.thumbnail(media.asset_id)
+                thumbnail_failure = self._media_library.thumbnail_failure(media.asset_id)
+                existing = MockAsset(
+                    asset_id=media.asset_id,
+                    name=media.name,
+                    kind=CORE_TO_UI_MEDIA_KIND[media.kind],
+                    duration_ms=(
+                        media.duration.to_milliseconds()
+                        if media.duration is not None
+                        else None
+                    ),
+                    width=media.width,
+                    height=media.height,
+                    color=MEDIA_COLORS[media.kind],
+                    source_path=media.source_path,
+                    status=(
+                        AssetStatus.READY
+                        if Path(media.source_path).is_file()
+                        else AssetStatus.MISSING
+                    ),
+                    thumbnail_png=(thumbnail.png_bytes if thumbnail is not None else None),
+                    thumbnail_error=(
+                        thumbnail_failure.message
+                        if thumbnail_failure is not None
+                        else None
+                    ),
+                    is_real_media=True,
+                )
+            assets[media.asset_id] = existing
+        self.state.assets = assets
+
+        previous_clips = {clip.clip_id: clip for clip in self.state.all_clips}
+        target_lists: dict[TrackKind, list[MockClip]] = {
+            kind: [] for kind in TrackKind
+        }
+        for track in project.tracks:
+            ui_track = CORE_TO_UI_TRACK_KIND[track.kind]
+            for clip in track.clips:
+                projected = previous_clips.get(clip.clip_id)
+                if projected is None:
+                    projected = MockClip(
+                        clip_id=clip.clip_id,
+                        track=ui_track,
+                        asset_id=clip.asset_id,
+                        label=clip.label,
+                        start_ms=clip.timeline_start.to_milliseconds(),
+                        duration_ms=clip.duration.to_milliseconds(),
+                    )
+                projected.track = ui_track
+                projected.asset_id = clip.asset_id
+                projected.label = clip.label
+                projected.start_ms = clip.timeline_start.to_milliseconds()
+                projected.duration_ms = clip.duration.to_milliseconds()
+                projected.source_in_ms = clip.source_in.to_milliseconds()
+                projected.source_out_ms = (
+                    clip.source_out.to_milliseconds()
+                    if clip.source_out is not None
+                    else None
+                )
+                projected.speed = float(clip.playback_rate.fraction)
+                target_lists[ui_track].append(projected)
+
+        self.state.visual_clips = target_lists[TrackKind.VISUAL]
+        self.state.music_clips = target_lists[TrackKind.MUSIC]
+        self.state.narration_clips = target_lists[TrackKind.NARRATION]
+        self.state.text_clips = target_lists[TrackKind.TEXT]
+        self.state.project_name = project.name
+        self.state.canvas_width = project.canvas.width
+        self.state.canvas_height = project.canvas.height
+        self.state.reference_asset_id = project.canvas.reference_asset_id
+
+        existing_ids = {clip.clip_id for clip in self.state.all_clips}
+        if self.state.selected_clip_id not in existing_ids:
+            self.state.selected_clip_id = None
+        self.state.selected_clip_ids = [
+            clip_id for clip_id in self.state.selected_clip_ids if clip_id in existing_ids
+        ]
+        if self.state.selected_asset_id not in self.state.assets:
+            self.state.selected_asset_id = None
+        self.state.playhead_ms = min(
+            max(self.state.playhead_ms, 0),
+            project.duration.to_milliseconds(),
+        )
+        visual_ids = {clip.clip_id for clip in self.state.visual_clips}
+        self.state.transitions = {
+            boundary: value
+            for boundary, value in self.state.transitions.items()
+            if all(clip_id in visual_ids for clip_id in boundary.split("|"))
+        }
+
     def import_sample_media(self) -> None:
         samples = _sample_assets()
         added = [asset_id for asset_id in samples if asset_id not in self.state.assets]
@@ -463,10 +620,12 @@ class MockController(QObject):
             self.state.import_warning = None
 
         self._execute_edit(f"{len(added)}개 미디어 가져오기", operation)
+        self._media_library.reset(self._persistent_project())
 
     def import_media_files(self, source_paths: Sequence[str]) -> MediaImportReport:
         """Analyze selected local files and publish their project-backed library views."""
 
+        previous_position = self._media_library.history_position
         report = self._media_library.import_paths(source_paths)
         if report.cancelled:
             self._set_status("미디어 가져오기를 취소했습니다")
@@ -487,6 +646,11 @@ class MockController(QObject):
             self.state.selected_asset_id = selected_id
             self.state.selected_clip_id = None
             self.state.selected_clip_ids.clear()
+
+        if self._media_library.history_position > previous_position:
+            self._record_core_history(previous_position)
+            self._sync_from_core(self._media_library.project)
+            self.state.is_dirty = self._media_library.project != self._saved_project
 
         self.state.import_warning = _import_warning_text(report)
         summary: list[str] = []
@@ -609,6 +773,9 @@ class MockController(QObject):
         ]
         state.transitions = {"clip-beach|clip-market": "페이드 · 0.75초"}
         self.state = state
+        project = self._persistent_project()
+        self._media_library.reset(project)
+        self._saved_project = project
         self._reset_history()
         self._publish()
 
@@ -619,13 +786,14 @@ class MockController(QObject):
             self._set_status("프로젝트 저장을 취소했습니다")
             return False
         try:
-            project = self._persistent_project()
+            project = self._media_library.project
             self._project_store.save(project, target)
         except (ProjectPersistenceError, ValueError) as error:
             self.last_persistence_error = str(error)
             self._set_status(f"프로젝트 저장 실패 · {error}")
             return False
         self.state.project_path = str(Path(target))
+        self._saved_project = project
         self.state.is_dirty = False
         self.last_persistence_error = None
         self._set_status("프로젝트를 저장했습니다")
@@ -642,6 +810,7 @@ class MockController(QObject):
             return False
 
         self._media_library.reset(project)
+        self._saved_project = project
         self.state = next_state
         self._reset_history()
         self._id_counter = count(1)
@@ -671,8 +840,13 @@ class MockController(QObject):
         if clean_name == self.state.project_name:
             return True
 
-        self._execute_edit("프로젝트 이름 변경", lambda: setattr(self.state, "project_name", clean_name))
-        return True
+        return (
+            self._execute_core(
+                RenameProject(clean_name),
+                "프로젝트 이름을 변경했습니다",
+            )
+            is not None
+        )
 
     def select_asset(self, asset_id: str | None) -> None:
         if asset_id is not None and asset_id not in self.state.assets:
@@ -729,37 +903,28 @@ class MockController(QObject):
             self._set_status("누락되거나 읽을 수 없는 미디어는 추가할 수 없습니다")
             return False
 
-        if asset.kind is MediaKind.AUDIO:
-            track = TrackKind.NARRATION if narration or asset.asset_id == "media-narration" else TrackKind.MUSIC
-            clips = self.clips_for_track(track)
-            start_ms = 0 if not clips else max(item.start_ms + item.duration_ms for item in clips)
-        else:
-            track = TrackKind.VISUAL
-            start_ms = self.state.total_duration_ms
-
-        duration_ms = asset.duration_ms if asset.duration_ms is not None else 5_000
-        if track is TrackKind.NARRATION:
-            duration_ms = min(duration_ms, 8_000)
-        clip = MockClip(
-            self._next_id("clip"),
-            track,
-            asset.asset_id,
-            asset.name.rsplit(".", maxsplit=1)[0],
-            start_ms,
-            duration_ms,
-            source_out_ms=asset.duration_ms,
+        explicit_narration = narration or asset.asset_id == "media-narration"
+        try:
+            clip_id = self._next_clip_id()
+        except ValueError as error:
+            self._set_status(f"미디어를 추가할 수 없습니다 · {error}")
+            return False
+        result = self._execute_core(
+            AddMediaClip(
+                asset.asset_id,
+                clip_id,
+                narration=explicit_narration,
+            ),
+            "타임라인에 미디어를 추가했습니다",
         )
-
-        def operation() -> None:
-            self.clips_for_track(track).append(clip)
-            self.state.selected_asset_id = None
-            self.state.selected_clip_id = clip.clip_id
-            self.state.selected_clip_ids = [clip.clip_id]
-            self.state.playhead_ms = clip.start_ms
-            if track is TrackKind.VISUAL and self.state.reference_asset_id is None:
-                self._set_original_canvas_reference()
-
-        self._execute_edit(f"{track.value} 트랙에 추가", operation)
+        if result is None:
+            return False
+        added = result.clip(clip_id)
+        self.state.selected_asset_id = None
+        self.state.selected_clip_id = clip_id
+        self.state.selected_clip_ids = [clip_id]
+        self.state.playhead_ms = added.timeline_start.to_milliseconds()
+        self._publish()
         return True
 
     def asset_usage_count(self, asset_id: str) -> int:
@@ -781,6 +946,7 @@ class MockController(QObject):
             return False
 
         if self._media_library.contains(asset.asset_id):
+            previous_position = self._media_library.history_position
             result = self._media_library.remove(asset.asset_id)
             if isinstance(result, MediaRemovalFailure):
                 suffix = (
@@ -791,9 +957,9 @@ class MockController(QObject):
                 self._set_status(f"{result.message}{suffix}")
                 self.state_changed.emit()
                 return False
-            del self.state.assets[asset.asset_id]
-            self.state.selected_asset_id = None
-            self.state.is_dirty = True
+            self._record_core_history(previous_position)
+            self._sync_from_core(self._media_library.project)
+            self.state.is_dirty = self._media_library.project != self._saved_project
             self.state.status_message = (
                 "보관함에서 미디어를 제거했습니다 · 컴퓨터의 원본 파일은 유지됩니다"
             )
@@ -916,15 +1082,18 @@ class MockController(QObject):
             self._set_status("선택한 클립은 더 이동할 수 없습니다")
             return False
 
-        def operation() -> None:
-            self.state.visual_clips[index], self.state.visual_clips[target] = (
-                self.state.visual_clips[target],
-                self.state.visual_clips[index],
-            )
-
         direction = "앞으로" if offset < 0 else "뒤로"
-        self._execute_edit(f"클립 {direction} 이동", operation)
-        return True
+        return (
+            self._execute_core(
+                MoveVisualClip(
+                    clip.clip_id,
+                    target,
+                    history_label=f"클립 {direction} 이동",
+                ),
+                f"클립을 {direction} 이동했습니다",
+            )
+            is not None
+        )
 
     def delete_selected_clip(self) -> bool:
         selected = self.selected_clips
@@ -932,6 +1101,22 @@ class MockController(QObject):
             self._set_status("삭제할 타임라인 클립을 선택하세요")
             return False
         selected_ids = {clip.clip_id for clip in selected}
+
+        if len(selected) == 1:
+            clip = selected[0]
+            if self._execute_core(
+                DeleteTimelineClip(clip.clip_id),
+                "클립을 삭제했습니다 · 보관함과 원본 파일은 유지됩니다",
+            ) is None:
+                return False
+            self.state.selected_clip_id = None
+            self.state.selected_clip_ids.clear()
+            self.state.playhead_ms = min(
+                self.state.playhead_ms,
+                self._media_library.project.duration.to_milliseconds(),
+            )
+            self._publish()
+            return True
 
         def operation() -> None:
             for track in TrackKind:
@@ -959,32 +1144,26 @@ class MockController(QObject):
         if asset is not None and asset.kind is MediaKind.PHOTO:
             self._set_status("사진은 분할 대신 표시 시간을 조절하세요")
             return False
-        relative_ms = self.state.playhead_ms - clip.start_ms
-        if relative_ms <= 250 or relative_ms >= clip.duration_ms - 250:
-            self._set_status("재생 헤드를 클립 양 끝에서 0.25초 이상 안쪽으로 이동하세요")
+        try:
+            trailing_clip_id = self._next_clip_id()
+        except ValueError as error:
+            self._set_status(f"클립을 분할할 수 없습니다 · {error}")
             return False
-        left_duration = relative_ms
-        right_duration = clip.duration_ms - relative_ms
-        right = deepcopy(clip)
-        right.clip_id = self._next_id("clip")
-        right.label = f"{clip.label} (뒤)"
-        right.start_ms = self.state.playhead_ms
-        right.duration_ms = right_duration
-        right.source_in_ms = clip.source_in_ms + round(relative_ms * clip.speed)
-        if clip.source_out_ms is not None:
-            clip_source_end = clip.source_out_ms
-            right.source_out_ms = clip_source_end
-
-        def operation() -> None:
-            clips = self.clips_for_track(clip.track)
-            index = clips.index(clip)
-            clip.duration_ms = left_duration
-            clip.source_out_ms = right.source_in_ms
-            clips.insert(index + 1, right)
-            self.state.selected_clip_id = right.clip_id
-            self.state.selected_clip_ids = [right.clip_id]
-
-        self._execute_edit("클립 분할", operation)
+        result = self._execute_core(
+            SplitClip(
+                clip.clip_id,
+                ProjectTime.from_milliseconds(self.state.playhead_ms),
+                trailing_clip_id,
+            ),
+            "재생 위치에서 클립을 분할했습니다",
+        )
+        if result is None:
+            return False
+        trailing = result.clip(trailing_clip_id)
+        self.state.selected_clip_id = trailing_clip_id
+        self.state.selected_clip_ids = [trailing_clip_id]
+        self.state.playhead_ms = trailing.timeline_start.to_milliseconds()
+        self._publish()
         return True
 
     def duplicate_selected_clip(self) -> bool:
@@ -1048,27 +1227,35 @@ class MockController(QObject):
             ):
                 self._set_status("원본 사용 구간이 미디어 길이를 벗어났습니다")
                 return False
-        source_span = new_out - new_in
-        result_duration = duration_ms if is_photo else round(source_span / speed)
-        if is_video and result_duration < 500:
-            self._set_status("속도 변경 뒤 클립은 최소 0.5초 이상이어야 합니다")
+        if is_photo:
+            command = UpdateClipTiming(
+                clip.clip_id,
+                photo_duration=ProjectTime.from_milliseconds(duration_ms),
+            )
+        else:
+            rate = Fraction(str(speed))
+            command = UpdateClipTiming(
+                clip.clip_id,
+                source_in=ProjectTime.from_milliseconds(new_in),
+                source_out=ProjectTime.from_milliseconds(new_out),
+                playback_rate=(
+                    PlaybackRate(rate.numerator, rate.denominator)
+                    if is_video
+                    else None
+                ),
+            )
+        if self._execute_core(command, "클립 속성을 적용했습니다") is None:
             return False
-
-        def operation() -> None:
-            clip.duration_ms = result_duration
-            if not is_photo:
-                clip.source_in_ms = new_in
-                clip.source_out_ms = new_out
-            if is_video:
-                clip.speed = speed
-            clip.volume = volume
-            clip.muted = muted
-            if fit_mode is not None and clip.track is TrackKind.VISUAL:
-                clip.fit_mode = fit_mode
-            if effect is not None and clip.track is TrackKind.VISUAL:
-                clip.effect = effect
-
-        self._execute_edit("클립 속성 적용", operation)
+        updated = self.selected_clip
+        if updated is None:
+            return False
+        updated.volume = volume
+        updated.muted = muted
+        if fit_mode is not None and updated.track is TrackKind.VISUAL:
+            updated.fit_mode = fit_mode
+        if effect is not None and updated.track is TrackKind.VISUAL:
+            updated.effect = effect
+        self._publish()
         return True
 
     def update_selected_audio(
@@ -1091,6 +1278,9 @@ class MockController(QObject):
         ):
             self._set_status("편집할 음악 또는 내레이션 클립 하나를 선택하세요")
             return False
+        if start_ms < 0:
+            self._set_status("오디오 클립 시작 위치는 0보다 작을 수 없습니다")
+            return False
         asset = self.asset_for_clip(clip)
         source_limit = asset.duration_ms if asset is not None else None
         if source_in_ms < 0 or source_out_ms <= source_in_ms or (
@@ -1103,18 +1293,24 @@ class MockController(QObject):
             self._set_status("페이드 합계가 오디오 클립 길이보다 길 수 없습니다")
             return False
 
-        def operation() -> None:
-            clip.start_ms = max(0, start_ms)
-            clip.source_in_ms = source_in_ms
-            clip.source_out_ms = source_out_ms
-            clip.duration_ms = duration_ms
-            clip.volume = min(100, max(0, volume))
-            clip.muted = muted
-            clip.fade_in_ms = fade_in_ms
-            clip.fade_out_ms = fade_out_ms
-            clip.ducking = ducking
-
-        self._execute_edit("오디오 속성 적용", operation)
+        command = UpdateClipTiming(
+            clip.clip_id,
+            source_in=ProjectTime.from_milliseconds(source_in_ms),
+            source_out=ProjectTime.from_milliseconds(source_out_ms),
+            timeline_start=ProjectTime.from_milliseconds(start_ms),
+            history_label="오디오 속성 적용",
+        )
+        if self._execute_core(command, "오디오 타이밍 속성을 적용했습니다") is None:
+            return False
+        updated = self.selected_clip
+        if updated is None:
+            return False
+        updated.volume = min(100, max(0, volume))
+        updated.muted = muted
+        updated.fade_in_ms = fade_in_ms
+        updated.fade_out_ms = fade_out_ms
+        updated.ducking = ducking
+        self._publish()
         return True
 
     def set_clip_fit(self, fit_mode: str) -> bool:
@@ -1410,7 +1606,19 @@ class MockController(QObject):
             self._set_status("실행 취소할 편집 명령이 없습니다")
             return False
         entry = self._history[self._history_position - 1]
-        self.state = deepcopy(entry.before)
+        if entry.core:
+            try:
+                project = self._media_library.undo()
+            except CommandError as error:
+                self._set_status(f"실행 취소할 수 없습니다 · {error}")
+                return False
+            self._sync_from_core(project)
+            self.state.is_dirty = project != self._saved_project
+        else:
+            if entry.mock is None:
+                self._set_status("실행 취소 이력 형식이 올바르지 않습니다")
+                return False
+            self.state = deepcopy(entry.mock.before)
         self._history_position -= 1
         self.state.status_message = f"실행 취소: {entry.label}"
         self._publish()
@@ -1421,7 +1629,19 @@ class MockController(QObject):
             self._set_status("다시 실행할 편집 명령이 없습니다")
             return False
         entry = self._history[self._history_position]
-        self.state = deepcopy(entry.after)
+        if entry.core:
+            try:
+                project = self._media_library.redo()
+            except CommandError as error:
+                self._set_status(f"다시 실행할 수 없습니다 · {error}")
+                return False
+            self._sync_from_core(project)
+            self.state.is_dirty = project != self._saved_project
+        else:
+            if entry.mock is None:
+                self._set_status("다시 실행 이력 형식이 올바르지 않습니다")
+                return False
+            self.state = deepcopy(entry.mock.after)
         self._history_position += 1
         self.state.status_message = f"다시 실행: {entry.label}"
         self._publish()
