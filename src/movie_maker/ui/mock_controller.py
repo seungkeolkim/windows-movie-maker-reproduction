@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from itertools import count
 from pathlib import Path
+from time import monotonic_ns
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal
@@ -18,6 +19,7 @@ from movie_maker.media import (
     MediaLibrary,
     MediaRemovalFailure,
 )
+from movie_maker.preview import PlaybackClock, ui_milliseconds
 from movie_maker.project import (
     Canvas,
     Clip,
@@ -170,6 +172,7 @@ class MockController(QObject):
         project_store: ProjectFileStore | None = None,
         *,
         clip_id_factory: Callable[[], str] | None = None,
+        playback_clock_ns: Callable[[], int] = monotonic_ns,
     ) -> None:
         super().__init__()
         self.state = MockProjectState()
@@ -180,6 +183,8 @@ class MockController(QObject):
         self._history_position = 0
         self._id_counter = count(1)
         self._clip_id_factory = clip_id_factory
+        self._playback_clock_ns = playback_clock_ns
+        self._playback = PlaybackClock(playback_clock_ns)
         self._saved_project = self._media_library.project
         self._sync_from_core(self._media_library.project)
 
@@ -202,6 +207,12 @@ class MockController(QObject):
         """Return successful real media commands in this project session."""
 
         return self._media_library.history_count
+
+    @property
+    def preview_position(self) -> ProjectTime:
+        """Return the exact non-persistent project playback position."""
+
+        return self._playback.position
 
     @property
     def can_undo(self) -> bool:
@@ -345,6 +356,18 @@ class MockController(QObject):
         if self.state.selected_clip_id is None:
             self.state.selected_clip_ids.clear()
 
+    def _reset_playback(self, project: Project) -> None:
+        self._playback = PlaybackClock(self._playback_clock_ns)
+        self._playback.sync_project(project)
+        self.state.playhead_ms = 0
+        self.state.is_playing = False
+
+    def _seek_preview(self, position: ProjectTime) -> ProjectTime:
+        result = self._playback.seek(self._media_library.project, position)
+        self.state.playhead_ms = ui_milliseconds(result)
+        self.state.is_playing = self._playback.is_playing
+        return result
+
     def _reset_history(self) -> None:
         self._history.clear()
         self._history_position = 0
@@ -353,6 +376,7 @@ class MockController(QObject):
         project = Project.empty(project_id=str(uuid4()))
         self._media_library.reset(project)
         self.state = MockProjectState(status_message="새 프로젝트를 만들었습니다")
+        self._reset_playback(project)
         self._saved_project = project
         self.last_persistence_error = None
         self._reset_history()
@@ -591,9 +615,10 @@ class MockController(QObject):
         if self.state.selected_asset_id not in self.state.assets:
             self.state.selected_asset_id = None
         self.state.playhead_ms = min(
-            max(self.state.playhead_ms, 0),
-            project.duration.to_milliseconds(),
+            max(ui_milliseconds(self._playback.sync_project(project)), 0),
+            ui_milliseconds(project.duration),
         )
+        self.state.is_playing = self._playback.is_playing
         visual_ids = {clip.clip_id for clip in self.state.visual_clips}
         self.state.transitions = {
             boundary: value
@@ -775,6 +800,7 @@ class MockController(QObject):
         self.state = state
         project = self._persistent_project()
         self._media_library.reset(project)
+        self._reset_playback(project)
         self._saved_project = project
         self._reset_history()
         self._publish()
@@ -812,6 +838,7 @@ class MockController(QObject):
         self._media_library.reset(project)
         self._saved_project = project
         self.state = next_state
+        self._reset_playback(project)
         self._reset_history()
         self._id_counter = count(1)
         self.last_persistence_error = None
@@ -871,7 +898,12 @@ class MockController(QObject):
             self._set_status("타임라인 선택을 해제했습니다")
         else:
             if clip.track is TrackKind.VISUAL:
-                self.state.playhead_ms = clip.start_ms
+                try:
+                    exact_clip = self._media_library.project.clip(clip.clip_id)
+                except KeyError:
+                    self.state.playhead_ms = clip.start_ms
+                else:
+                    self._seek_preview(exact_clip.timeline_start)
             self._set_status(f"{clip.label} 클립 선택")
         self.state_changed.emit()
 
@@ -888,7 +920,12 @@ class MockController(QObject):
         elif len(valid_ids) == 1 and active_clip_id is not None:
             clip = existing[active_clip_id]
             if clip.track is TrackKind.VISUAL:
-                self.state.playhead_ms = clip.start_ms
+                try:
+                    exact_clip = self._media_library.project.clip(clip.clip_id)
+                except KeyError:
+                    self.state.playhead_ms = clip.start_ms
+                else:
+                    self._seek_preview(exact_clip.timeline_start)
             self._set_status(f"{clip.label} 클립 선택")
         else:
             self._set_status(f"클립 {len(valid_ids)}개 선택 · 공통 명령만 사용할 수 있습니다")
@@ -923,7 +960,7 @@ class MockController(QObject):
         self.state.selected_asset_id = None
         self.state.selected_clip_id = clip_id
         self.state.selected_clip_ids = [clip_id]
-        self.state.playhead_ms = added.timeline_start.to_milliseconds()
+        self._seek_preview(added.timeline_start)
         self._publish()
         return True
 
@@ -1009,7 +1046,12 @@ class MockController(QObject):
             self.state.canvas_width = 1920
             self.state.canvas_height = 1080
             self.state.reference_asset_id = "media-missing"
-        self.state.playhead_ms = missing_clip.start_ms
+        project = self._persistent_project()
+        self._media_library.reset(project)
+        self._saved_project = project
+        self._reset_history()
+        self._reset_playback(project)
+        self._seek_preview(project.clip(missing_clip.clip_id).timeline_start)
         self.state.selected_asset_id = "media-missing"
         self.state.selected_clip_id = None
         self.state.selected_clip_ids.clear()
@@ -1111,10 +1153,8 @@ class MockController(QObject):
                 return False
             self.state.selected_clip_id = None
             self.state.selected_clip_ids.clear()
-            self.state.playhead_ms = min(
-                self.state.playhead_ms,
-                self._media_library.project.duration.to_milliseconds(),
-            )
+            self._playback.sync_project(self._media_library.project)
+            self.state.playhead_ms = ui_milliseconds(self._playback.position)
             self._publish()
             return True
 
@@ -1152,7 +1192,7 @@ class MockController(QObject):
         result = self._execute_core(
             SplitClip(
                 clip.clip_id,
-                ProjectTime.from_milliseconds(self.state.playhead_ms),
+                self._playback.position,
                 trailing_clip_id,
             ),
             "재생 위치에서 클립을 분할했습니다",
@@ -1162,7 +1202,7 @@ class MockController(QObject):
         trailing = result.clip(trailing_clip_id)
         self.state.selected_clip_id = trailing_clip_id
         self.state.selected_clip_ids = [trailing_clip_id]
-        self.state.playhead_ms = trailing.timeline_start.to_milliseconds()
+        self._seek_preview(trailing.timeline_start)
         self._publish()
         return True
 
@@ -1564,34 +1604,41 @@ class MockController(QObject):
         self.state_changed.emit()
 
     def seek(self, position_ms: int) -> None:
-        self.state.is_playing = False
-        self.state.playhead_ms = min(max(position_ms, 0), self.state.total_duration_ms)
+        self._seek_preview(ProjectTime.from_milliseconds(position_ms))
         self._set_status(f"재생 위치 {format_time(self.state.playhead_ms)}")
         self.state_changed.emit()
 
     def step_frame(self, direction: int) -> None:
-        self.seek(self.state.playhead_ms + direction * 33)
-        self._set_status("목업 프레임 이동 · 30fps 기준")
+        position = self._playback.step(self._media_library.project, direction)
+        self.state.playhead_ms = ui_milliseconds(position)
+        self.state.is_playing = False
+        self._set_status("실제 미디어 프레임 경계로 이동했습니다")
+        self.state_changed.emit()
 
     def toggle_playback(self) -> bool:
-        total = self.state.total_duration_ms
-        if total == 0:
+        project = self._media_library.project
+        if project.duration.nanoseconds == 0:
             self._set_status("재생하려면 먼저 타임라인에 미디어를 추가하세요")
             return False
-        if self.state.playhead_ms >= total and not self.state.is_playing:
-            self.state.playhead_ms = 0
-        self.state.is_playing = not self.state.is_playing
-        self._set_status("재생 중 · 목업" if self.state.is_playing else "일시 정지")
+        self.state.is_playing = self._playback.toggle(project)
+        self.state.playhead_ms = ui_milliseconds(self._playback.position)
+        self._set_status("재생 중" if self.state.is_playing else "일시 정지")
         self.state_changed.emit()
         return True
 
-    def advance_playback(self, elapsed_ms: int = 100) -> None:
-        if not self.state.is_playing:
+    def advance_playback(self, elapsed_ms: int | None = None) -> None:
+        if not self._playback.is_playing:
             return
-        self.state.playhead_ms += elapsed_ms
-        if self.state.playhead_ms >= self.state.total_duration_ms:
-            self.state.playhead_ms = self.state.total_duration_ms
-            self.state.is_playing = False
+        if elapsed_ms is None:
+            position = self._playback.advance(self._media_library.project)
+        else:
+            position = self._playback.advance_elapsed(
+                self._media_library.project,
+                elapsed_ms * 1_000_000,
+            )
+        self.state.playhead_ms = ui_milliseconds(position)
+        self.state.is_playing = self._playback.is_playing
+        if not self.state.is_playing and position == self._media_library.project.duration:
             self.state.status_message = "프로젝트 끝 · 다시 재생하면 처음부터 시작합니다"
         self._publish()
 

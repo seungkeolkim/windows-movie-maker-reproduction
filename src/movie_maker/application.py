@@ -53,7 +53,7 @@ def runtime_report() -> list[str]:
 
 
 def run(*, check_only: bool = False) -> int:
-    """Run the environment check or show the interactive product mock-up."""
+    """Run the environment check or show the desktop editor."""
 
     app = create_application()
     if check_only:

@@ -52,6 +52,14 @@ from PySide6.QtWidgets import (
 )
 
 from movie_maker.media import AUDIO_EXTENSIONS, PHOTO_EXTENSIONS, VIDEO_EXTENSIONS
+from movie_maker.preview import (
+    DecodedFrame,
+    FrameTarget,
+    PreviewDecodeCoordinator,
+    PreviewDecodeFailure,
+    frame_at_project_time,
+)
+from movie_maker.project import Project
 from movie_maker.ui.dialogs import (
     DecisionDialog,
     ExportSettingsDialog,
@@ -70,6 +78,7 @@ from movie_maker.ui.mock_model import (
     MockClip,
     TrackKind,
 )
+from movie_maker.ui.preview import PreviewBridge
 
 MediaFileSelector = Callable[[], Sequence[str]]
 ProjectOpenSelector = Callable[[], str | None]
@@ -92,7 +101,7 @@ MEDIA_FILE_FILTER = ";;".join(
 
 
 class MainWindow(QMainWindow):
-    """S-EDITOR interactive mock-up using only deterministic in-memory state."""
+    """S-EDITOR view combining real MVP services with later-stage mock states."""
 
     def __init__(
         self,
@@ -101,6 +110,7 @@ class MainWindow(QMainWindow):
         media_file_selector: MediaFileSelector | None = None,
         project_open_selector: ProjectOpenSelector | None = None,
         project_save_selector: ProjectSaveSelector | None = None,
+        preview_coordinator: PreviewDecodeCoordinator | None = None,
     ) -> None:
         super().__init__()
         self.setObjectName("S-EDITOR")
@@ -117,9 +127,15 @@ class MainWindow(QMainWindow):
         self._dialogs: list[QWidget] = []
         self._actions: dict[str, QAction] = {}
         self._timeline_lists: dict[TrackKind, QListWidget] = {}
+        self._preview_bridge = PreviewBridge(preview_coordinator, self)
+        self._preview_png: bytes | None = None
+        self._preview_frame_key: tuple[str, str, str, int, int] | None = None
+        self._preview_error_key: tuple[str, str, str, int, int] | None = None
+        self._preview_error_text: str | None = None
+        self._preview_project: Project | None = None
 
         self._preview_timer = QTimer(self)
-        self._preview_timer.setInterval(100)
+        self._preview_timer.setInterval(16)
         self._preview_timer.timeout.connect(self.controller.advance_playback)
         self._export_timer = QTimer(self)
         self._export_timer.setInterval(200)
@@ -137,6 +153,8 @@ class MainWindow(QMainWindow):
         self.controller.state_changed.connect(self.refresh)
         self.controller.status_changed.connect(self._show_status)
         self.controller.export_changed.connect(self._refresh_export_panel)
+        self._preview_bridge.frame_ready.connect(self._accept_preview_frame)
+        self._preview_bridge.frame_failed.connect(self._accept_preview_failure)
         self.refresh()
 
     # ------------------------------------------------------------------
@@ -179,7 +197,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(heading)
         description = QLabel(
             "로컬 영상, 사진과 오디오를 가져와 미디어 보관함을 만들 수 있습니다.\n"
-            "가져오기, 프로젝트 저장과 타임라인 편집은 실제 기능이며 재생·출력은 목업입니다."
+            "가져오기, 저장, 타임라인 편집과 영상·사진 미리 보기는 실제 기능입니다.\n"
+            "오디오 미리 듣기와 동영상 출력은 후속 작업입니다."
         )
         description.setObjectName("secondaryText")
         description.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -231,7 +250,7 @@ class MainWindow(QMainWindow):
         title.setObjectName("panelHeading")
         header.addWidget(title)
         header.addStretch()
-        self.preview_badge = QLabel("목업 프레임")
+        self.preview_badge = QLabel("실제 프레임")
         self.preview_badge.setObjectName("mockBadge")
         header.addWidget(self.preview_badge)
         layout.addLayout(header)
@@ -247,18 +266,18 @@ class MainWindow(QMainWindow):
         controls = QHBoxLayout()
         self.step_back_button = QPushButton("◀│")
         self.step_back_button.setObjectName("E-PREVIEW-STEP-BACK")
-        self.step_back_button.setToolTip("이전 목업 프레임 · 1.0")
-        self.step_back_button.clicked.connect(lambda: self.controller.step_frame(-1))
+        self.step_back_button.setToolTip("이전 실제 미디어 프레임")
+        self.step_back_button.clicked.connect(lambda: self._step_preview(-1))
         controls.addWidget(self.step_back_button)
         self.play_button = QPushButton("▶  재생")
         self.play_button.setObjectName("E-PREVIEW-PLAY")
         self.play_button.setMinimumWidth(92)
-        self.play_button.clicked.connect(self.controller.toggle_playback)
+        self.play_button.clicked.connect(self._toggle_preview_playback)
         controls.addWidget(self.play_button)
         self.step_forward_button = QPushButton("│▶")
         self.step_forward_button.setObjectName("E-PREVIEW-STEP-FORWARD")
-        self.step_forward_button.setToolTip("다음 목업 프레임 · 1.0")
-        self.step_forward_button.clicked.connect(lambda: self.controller.step_frame(1))
+        self.step_forward_button.setToolTip("다음 실제 미디어 프레임")
+        self.step_forward_button.clicked.connect(lambda: self._step_preview(1))
         controls.addWidget(self.step_forward_button)
         self.preview_time = QLabel("00:00.000 / 00:00.000")
         self.preview_time.setObjectName("E-PREVIEW-TIME")
@@ -267,7 +286,7 @@ class MainWindow(QMainWindow):
         self.preview_seek = QSlider(Qt.Orientation.Horizontal)
         self.preview_seek.setObjectName("E-PREVIEW-SEEK")
         self.preview_seek.setAccessibleName("프로젝트 재생 위치")
-        self.preview_seek.sliderMoved.connect(self.controller.seek)
+        self.preview_seek.sliderMoved.connect(self._seek_preview)
         controls.addWidget(self.preview_seek, 1)
         self.preview_mute_button = QPushButton("🔊  미리 듣기")
         self.preview_mute_button.setObjectName("E-PREVIEW-MUTE")
@@ -352,7 +371,7 @@ class MainWindow(QMainWindow):
         self.timeline_ruler = QSlider(Qt.Orientation.Horizontal)
         self.timeline_ruler.setObjectName("E-TIMELINE-RULER")
         self.timeline_ruler.setAccessibleName("타임라인 눈금과 재생 헤드")
-        self.timeline_ruler.sliderMoved.connect(self.controller.seek)
+        self.timeline_ruler.sliderMoved.connect(self._seek_preview)
         layout.addWidget(self.timeline_ruler)
 
         for track in TrackKind:
@@ -830,6 +849,11 @@ class MainWindow(QMainWindow):
             "exit": self._action("종료", self.close),
             "undo": self._action("실행 취소", self.controller.undo, "Ctrl+Z"),
             "redo": self._action("다시 실행", self.controller.redo, "Ctrl+Y"),
+            "play_pause": self._action(
+                "재생/일시 정지",
+                self._toggle_preview_playback,
+                "Space",
+            ),
             "delete": self._action("선택 항목 삭제", self._delete_contextual, "Delete"),
             "split": self._action("재생 위치에서 분할", self.controller.split_selected_clip, "Ctrl+B"),
             "duplicate": self._action("클립 복제 · 1.0", self.controller.duplicate_selected_clip, "Ctrl+D"),
@@ -923,6 +947,9 @@ class MainWindow(QMainWindow):
         self._add_actions(edit_menu, "undo", "redo")
         edit_menu.addSeparator()
         self._add_actions(edit_menu, "delete")
+
+        playback_menu = menu_bar.addMenu("재생")
+        self._add_actions(playback_menu, "play_pause")
 
         clip_menu = menu_bar.addMenu("클립")
         self._add_actions(
@@ -1087,15 +1114,24 @@ class MainWindow(QMainWindow):
 
     def refresh(self) -> None:
         state = self.controller.state
+        project = self.controller.media_project
+        project_changed = project is not self._preview_project
+        if project_changed:
+            self._preview_project = project
+            self._preview_png = None
+            self._preview_frame_key = None
+            self._preview_error_key = None
+            self._preview_error_text = None
+            self._preview_bridge.cancel(clear_cache=True)
         title_suffix = " *" if state.is_dirty else ""
         self.setWindowTitle(
             f"{state.project_name}{title_suffix} — Movie Maker Reproduction · "
-            "W-04 타임라인 편집 · 재생·출력 인터랙티브 목업"
+            "W-05 실제 미리 보기 · 오디오·출력 후속"
         )
         self.preview_stack.setCurrentIndex(0 if not state.assets else 1)
         self._refresh_library()
         self._refresh_timeline()
-        self._refresh_preview()
+        self._refresh_preview(replace_request=project_changed)
         self._refresh_inspector()
         self._refresh_actions()
         self._refresh_export_panel()
@@ -1107,7 +1143,7 @@ class MainWindow(QMainWindow):
         )
         self.status_summary.setText(
             f"길이 {format_time(state.total_duration_ms)} · "
-            f"{background_summary} · 미디어 보관함 실제 분석 · 편집 목업"
+            f"{background_summary} · 미디어 분석·편집·미리 보기 실제"
         )
         if state.is_playing and not self._preview_timer.isActive():
             self._preview_timer.start()
@@ -1235,7 +1271,7 @@ class MainWindow(QMainWindow):
         painter.end()
         return QIcon(pixmap)
 
-    def _refresh_preview(self) -> None:
+    def _refresh_preview(self, *, replace_request: bool = False) -> None:
         state = self.controller.state
         total = state.total_duration_ms
         self.preview_seek.setRange(0, total)
@@ -1249,6 +1285,9 @@ class MainWindow(QMainWindow):
         self.step_back_button.setEnabled(state.playhead_ms > 0)
         self.step_forward_button.setEnabled(state.playhead_ms < total)
         if not state.visual_clips:
+            self._preview_bridge.cancel()
+            self._preview_png = None
+            self._preview_frame_key = None
             self.preview_canvas.setStyleSheet(
                 "background:#111722; border:1px dashed #657083; border-radius:8px; color:#aab3c2;"
             )
@@ -1257,32 +1296,118 @@ class MainWindow(QMainWindow):
                 "왼쪽 보관함에서 항목을 더블클릭하거나 ‘타임라인에 추가’를 누릅니다."
             )
             return
-        clip = self._visual_clip_at(state.playhead_ms)
-        if clip is None:
+        preview = frame_at_project_time(
+            self.controller.media_project,
+            self.controller.preview_position,
+        )
+        target = preview.target
+        if target is None:
             return
-        asset = self.controller.asset_for_clip(clip)
-        color = asset.color if asset is not None else "#273140"
-        missing = asset is None or asset.status is not AssetStatus.READY
-        if missing:
-            color = "#4a4f58"
+        asset = state.assets.get(target.asset_id)
+        if asset is None or asset.status is not AssetStatus.READY:
+            self._preview_bridge.cancel()
+            self._preview_png = None
+            self._preview_frame_key = None
+            self._show_preview_message(
+                "⚠ 원본 미디어 누락",
+                "누락 미디어 화면에서 원본 파일을 다시 연결하세요.",
+                error=True,
+            )
+            return
+        if self._preview_frame_key == target.cache_key and self._preview_png is not None:
+            self._render_preview_pixmap()
+            return
+        if self._preview_error_key == target.cache_key and self._preview_error_text is not None:
+            self._show_preview_message(target.clip_label, self._preview_error_text, error=True)
+            return
+        self.preview_canvas.setStyleSheet(
+            "background:#111722; border:1px solid #78869a; border-radius:8px; color:white;"
+        )
+        self.preview_canvas.setText(
+            f"<b>{target.clip_label}</b><br>실제 미디어 프레임을 읽는 중…"
+        )
+        self._preview_bridge.request(target, replace=replace_request)
+
+    def _current_preview_target(self) -> FrameTarget | None:
+        return frame_at_project_time(
+            self.controller.media_project,
+            self.controller.preview_position,
+        ).target
+
+    def _seek_preview(self, position_ms: int) -> None:
+        self.controller.seek(position_ms)
+        target = self._current_preview_target()
+        if target is not None:
+            self._preview_bridge.request(target, replace=True)
+
+    def _step_preview(self, direction: int) -> None:
+        self.controller.step_frame(direction)
+        target = self._current_preview_target()
+        if target is not None:
+            self._preview_bridge.request(target, replace=True)
+
+    def _toggle_preview_playback(self) -> bool:
+        return self.controller.toggle_playback()
+
+    def _accept_preview_frame(self, frame: object) -> None:
+        if not isinstance(frame, DecodedFrame):
+            return
+        current = self._current_preview_target()
+        if current is None or current.cache_key != frame.target.cache_key:
+            if current is not None:
+                self._preview_bridge.request(current)
+            return
+        self._preview_png = frame.png_bytes
+        self._preview_frame_key = frame.target.cache_key
+        self._preview_error_key = None
+        self._preview_error_text = None
+        self._render_preview_pixmap()
+
+    def _accept_preview_failure(self, failure: object) -> None:
+        if not isinstance(failure, PreviewDecodeFailure):
+            return
+        current = self._current_preview_target()
+        if current is None or current.cache_key != failure.target.cache_key:
+            if current is not None:
+                self._preview_bridge.request(current)
+            return
+        self._preview_png = None
+        self._preview_frame_key = None
+        self._preview_error_key = failure.target.cache_key
+        self._preview_error_text = failure.message
+        self._show_preview_message(failure.target.clip_label, failure.message, error=True)
+        self.controller.report_status(f"미리 보기 실패 · {failure.message}")
+
+    def _render_preview_pixmap(self) -> None:
+        if self._preview_png is None:
+            return
+        source = QPixmap()
+        if not source.loadFromData(self._preview_png):
+            self._show_preview_message(
+                "프레임을 표시할 수 없습니다",
+                "디코딩 결과가 올바른 PNG가 아닙니다. 다시 시도하세요.",
+                error=True,
+            )
+            return
+        target_size = self.preview_canvas.contentsRect().size()
+        scaled = source.scaled(
+            target_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.preview_canvas.setText("")
+        self.preview_canvas.setPixmap(scaled)
+        self.preview_canvas.setStyleSheet(
+            "background:#090d14; border:1px solid #78869a; border-radius:8px;"
+        )
+
+    def _show_preview_message(self, heading: str, message: str, *, error: bool) -> None:
+        self.preview_canvas.clear()
+        color = "#4a2228" if error else "#111722"
         self.preview_canvas.setStyleSheet(
             f"background:{color}; border:1px solid #78869a; border-radius:8px; color:white;"
         )
-        canvas = (
-            f"{state.canvas_width}×{state.canvas_height}"
-            if state.canvas_width is not None and state.canvas_height is not None
-            else "화면 미정"
-        )
-        frame_time = max(0, state.playhead_ms - clip.start_ms)
-        main_text = "⚠ 원본 미디어 누락" if missing else clip.label
-        fit_note = f"{clip.fit_mode} · 회전 {clip.rotation}° · 효과 {clip.effect}"
-        overlay = self._active_text_overlay(state.playhead_ms)
-        overlay_text = f"<br><br><span style='font-size:18px'>{overlay}</span>" if overlay else ""
-        self.preview_canvas.setText(
-            f"<span style='font-size:22px'><b>{main_text}</b></span><br>"
-            f"목업 프레임 {format_time(frame_time)}<br>"
-            f"프로젝트 화면 {canvas} · {state.canvas_mode}<br>{fit_note}{overlay_text}"
-        )
+        self.preview_canvas.setText(f"<b>{heading}</b><br>{message}")
 
     def _visual_clip_at(self, position_ms: int) -> MockClip | None:
         clips = self.controller.state.visual_clips
@@ -1515,6 +1640,11 @@ class MainWindow(QMainWindow):
         )
         self._set_action("undo", self.controller.can_undo and not locked, "되돌릴 편집이 없습니다")
         self._set_action("redo", self.controller.can_redo and not locked, "다시 실행할 편집이 없습니다")
+        self._set_action(
+            "play_pause",
+            bool(state.visual_clips) and not locked,
+            "재생하려면 시각 클립이 필요합니다",
+        )
         self._actions["undo"].setText(
             f"실행 취소: {self.controller.undo_label}"
             if self.controller.undo_label
@@ -1969,6 +2099,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._allow_close or not self.controller.state.is_dirty:
+            self._preview_timer.stop()
+            self._preview_bridge.close()
             event.accept()
             return
         event.ignore()
@@ -2005,6 +2137,8 @@ class MainWindow(QMainWindow):
         elif event.size().width() >= 1160 and self._responsive_hidden_inspector:
             self._responsive_hidden_inspector = False
             self.inspector_dock.show()
+        if self._preview_png is not None:
+            self._render_preview_pixmap()
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
