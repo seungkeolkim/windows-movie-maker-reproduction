@@ -11,6 +11,7 @@ from typing import Any
 
 from movie_maker.project.model import (
     CURRENT_PROJECT_SCHEMA_VERSION,
+    AudioLevel,
     Canvas,
     Clip,
     MediaKind,
@@ -88,6 +89,12 @@ def _optional_integer(value: object, label: str) -> int | None:
     return _integer(value, label)
 
 
+def _boolean(value: object, label: str) -> bool:
+    if type(value) is not bool:
+        raise InvalidProjectDocument(f"{label} must be a boolean.")
+    return value
+
+
 def _ratio_document(numerator: int, denominator: int) -> JsonObject:
     return {"numerator": numerator, "denominator": denominator}
 
@@ -151,6 +158,8 @@ def _clip_to_document(clip: Clip) -> JsonObject:
             clip.playback_rate.numerator,
             clip.playback_rate.denominator,
         ),
+        "audio_level_percent": clip.audio_level.percent,
+        "audio_muted": clip.audio_muted,
     }
 
 
@@ -253,6 +262,13 @@ def _parse_clip(value: object, track: TrackKind, index: int) -> Clip:
         ),
         source_out=ProjectTime(source_out_ns) if source_out_ns is not None else None,
         playback_rate=PlaybackRate(*playback),
+        audio_level=AudioLevel(
+            _integer(
+                clip.get("audio_level_percent", 100),
+                f"{label}.audio_level_percent",
+            )
+        ),
+        audio_muted=_boolean(clip.get("audio_muted", False), f"{label}.audio_muted"),
     )
 
 

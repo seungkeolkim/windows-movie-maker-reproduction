@@ -51,6 +51,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from movie_maker.audio import (
+    AudioDecodeCoordinator,
+    AudioDecodeFailure,
+    AudioGraph,
+    AudioGraphError,
+    DecodedAudio,
+    audio_frames_for_time,
+    build_audio_graph,
+)
 from movie_maker.media import AUDIO_EXTENSIONS, PHOTO_EXTENSIONS, VIDEO_EXTENSIONS
 from movie_maker.preview import (
     DecodedFrame,
@@ -59,7 +68,8 @@ from movie_maker.preview import (
     PreviewDecodeFailure,
     frame_at_project_time,
 )
-from movie_maker.project import Project
+from movie_maker.project import Project, ProjectTime
+from movie_maker.ui.audio import AudioOutput, AudioOutputError, AudioPreviewBridge, QtAudioOutput
 from movie_maker.ui.dialogs import (
     DecisionDialog,
     ExportSettingsDialog,
@@ -83,6 +93,8 @@ from movie_maker.ui.preview import PreviewBridge
 MediaFileSelector = Callable[[], Sequence[str]]
 ProjectOpenSelector = Callable[[], str | None]
 ProjectSaveSelector = Callable[[str | None], str | None]
+
+AUDIO_PREVIEW_CHUNK = ProjectTime.from_seconds(30)
 
 
 def _file_patterns(extensions: frozenset[str]) -> str:
@@ -111,6 +123,8 @@ class MainWindow(QMainWindow):
         project_open_selector: ProjectOpenSelector | None = None,
         project_save_selector: ProjectSaveSelector | None = None,
         preview_coordinator: PreviewDecodeCoordinator | None = None,
+        audio_coordinator: AudioDecodeCoordinator | None = None,
+        audio_output: AudioOutput | None = None,
     ) -> None:
         super().__init__()
         self.setObjectName("S-EDITOR")
@@ -133,6 +147,13 @@ class MainWindow(QMainWindow):
         self._preview_error_key: tuple[str, str, str, int, int] | None = None
         self._preview_error_text: str | None = None
         self._preview_project: Project | None = None
+        self._audio_bridge = AudioPreviewBridge(audio_coordinator, self)
+        self._audio_output = audio_output or QtAudioOutput(self)
+        self._audio_graph: AudioGraph | None = None
+        self._audio_failure_key: tuple[object, ...] | None = None
+        self._audio_build_failure_project: Project | None = None
+        if isinstance(self._audio_output, QtAudioOutput):
+            self._audio_output.output_failed.connect(self._accept_audio_output_failure)
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(16)
@@ -155,6 +176,8 @@ class MainWindow(QMainWindow):
         self.controller.export_changed.connect(self._refresh_export_panel)
         self._preview_bridge.frame_ready.connect(self._accept_preview_frame)
         self._preview_bridge.frame_failed.connect(self._accept_preview_failure)
+        self._audio_bridge.audio_ready.connect(self._accept_audio)
+        self._audio_bridge.audio_failed.connect(self._accept_audio_failure)
         self.refresh()
 
     # ------------------------------------------------------------------
@@ -197,8 +220,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(heading)
         description = QLabel(
             "로컬 영상, 사진과 오디오를 가져와 미디어 보관함을 만들 수 있습니다.\n"
-            "가져오기, 저장, 타임라인 편집과 영상·사진 미리 보기는 실제 기능입니다.\n"
-            "오디오 미리 듣기와 동영상 출력은 후속 작업입니다."
+            "가져오기, 저장, 타임라인 편집과 영상·사진·오디오 미리 보기는 실제 기능입니다.\n"
+            "동영상 출력은 다음 작업입니다."
         )
         description.setObjectName("secondaryText")
         description.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -250,7 +273,7 @@ class MainWindow(QMainWindow):
         title.setObjectName("panelHeading")
         header.addWidget(title)
         header.addStretch()
-        self.preview_badge = QLabel("실제 프레임")
+        self.preview_badge = QLabel("실제 프레임·오디오")
         self.preview_badge.setObjectName("mockBadge")
         header.addWidget(self.preview_badge)
         layout.addLayout(header)
@@ -671,7 +694,10 @@ class MainWindow(QMainWindow):
         apply_button.setProperty("primary", True)
         apply_button.clicked.connect(self._apply_clip_properties)
         layout.addWidget(apply_button)
-        note = QLabel("실제 프레임·오디오 처리는 하지 않으며 값과 화면 피드백만 바뀝니다.")
+        note = QLabel(
+            "트리밍·속도와 영상 원본음은 실제 프로젝트에 적용됩니다. "
+            "화면 배치와 효과는 1.0 목업입니다."
+        )
         note.setObjectName("secondaryText")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -1126,12 +1152,13 @@ class MainWindow(QMainWindow):
         title_suffix = " *" if state.is_dirty else ""
         self.setWindowTitle(
             f"{state.project_name}{title_suffix} — Movie Maker Reproduction · "
-            "W-05 실제 미리 보기 · 오디오·출력 후속"
+            "W-06 실제 오디오 미리 듣기 · 출력 후속"
         )
         self.preview_stack.setCurrentIndex(0 if not state.assets else 1)
         self._refresh_library()
         self._refresh_timeline()
         self._refresh_preview(replace_request=project_changed)
+        self._refresh_audio(replace_request=project_changed)
         self._refresh_inspector()
         self._refresh_actions()
         self._refresh_export_panel()
@@ -1143,7 +1170,7 @@ class MainWindow(QMainWindow):
         )
         self.status_summary.setText(
             f"길이 {format_time(state.total_duration_ms)} · "
-            f"{background_summary} · 미디어 분석·편집·미리 보기 실제"
+            f"{background_summary} · 미디어 분석·편집·영상·오디오 미리 보기 실제"
         )
         if state.is_playing and not self._preview_timer.isActive():
             self._preview_timer.start()
@@ -1327,6 +1354,88 @@ class MainWindow(QMainWindow):
             f"<b>{target.clip_label}</b><br>실제 미디어 프레임을 읽는 중…"
         )
         self._preview_bridge.request(target, replace=replace_request)
+
+    def _refresh_audio(self, *, replace_request: bool = False) -> None:
+        state = self.controller.state
+        position = self.controller.preview_position
+        if replace_request:
+            self._audio_bridge.cancel()
+            self._audio_output.stop()
+            self._audio_graph = None
+            self._audio_failure_key = None
+            self._audio_build_failure_project = None
+        if not state.is_playing or state.preview_muted:
+            self._audio_bridge.cancel()
+            self._audio_output.stop()
+            self._audio_graph = None
+            self._audio_failure_key = None
+            self._audio_build_failure_project = None
+            return
+        current = self._audio_graph
+        if current is not None and current.start <= position < current.end:
+            return
+        if self._audio_build_failure_project is self.controller.media_project:
+            return
+        try:
+            graph = build_audio_graph(
+                self.controller.media_project,
+                start=position,
+                duration=AUDIO_PREVIEW_CHUNK,
+            )
+        except AudioGraphError as error:
+            self._audio_bridge.cancel()
+            self._audio_output.stop()
+            self._audio_graph = None
+            self._audio_build_failure_project = self.controller.media_project
+            self.controller.report_status(f"오디오 미리 듣기 실패 · {error}")
+            return
+        if graph.cache_key == self._audio_failure_key:
+            return
+        self._audio_graph = graph
+        self._audio_bridge.request(graph)
+
+    def _accept_audio(self, decoded: object) -> None:
+        if not isinstance(decoded, DecodedAudio):
+            return
+        state = self.controller.state
+        position = self.controller.preview_position
+        if (
+            not state.is_playing
+            or state.preview_muted
+            or decoded.graph.project_id != self.controller.media_project.project_id
+            or not decoded.graph.start <= position < decoded.graph.end
+        ):
+            return
+        elapsed = position - decoded.graph.start
+        skipped_frames = audio_frames_for_time(elapsed, decoded.graph.sample_rate)
+        byte_offset = skipped_frames * decoded.graph.channels * 2
+        try:
+            self._audio_output.play(
+                decoded.pcm_bytes[byte_offset:],
+                sample_rate=decoded.graph.sample_rate,
+                channels=decoded.graph.channels,
+            )
+        except AudioOutputError as error:
+            self._audio_failure_key = decoded.graph.cache_key
+            self._audio_graph = None
+            self.controller.report_status(f"오디오 출력 장치 오류 · {error}")
+
+    def _accept_audio_failure(self, failure: object) -> None:
+        if not isinstance(failure, AudioDecodeFailure):
+            return
+        current = self._audio_graph
+        if current is None or current.cache_key != failure.graph.cache_key:
+            return
+        self._audio_graph = None
+        self._audio_failure_key = failure.graph.cache_key
+        self._audio_output.stop()
+        self.controller.report_status(f"오디오 미리 듣기 실패 · {failure.message}")
+
+    def _accept_audio_output_failure(self, message: str) -> None:
+        if self._audio_graph is not None:
+            self._audio_failure_key = self._audio_graph.cache_key
+        self._audio_graph = None
+        self.controller.report_status(f"오디오 출력 장치 오류 · {message}")
 
     def _current_preview_target(self) -> FrameTarget | None:
         return frame_at_project_time(
@@ -2101,6 +2210,8 @@ class MainWindow(QMainWindow):
         if self._allow_close or not self.controller.state.is_dirty:
             self._preview_timer.stop()
             self._preview_bridge.close()
+            self._audio_bridge.close()
+            self._audio_output.close()
             event.accept()
             return
         event.ignore()

@@ -143,7 +143,7 @@ def test_qt_preview_renders_decoded_frame_and_space_controls_real_clock(qtbot, t
         and not window.preview_canvas.pixmap().isNull(),
         timeout=2_000,
     )
-    assert window.preview_badge.text() == "실제 프레임"
+    assert window.preview_badge.text() == "실제 프레임·오디오"
     assert window._actions["play_pause"].shortcut() == QKeySequence("Space")
     before = (controller.media_project, controller.history_position, controller.state.is_dirty)
 

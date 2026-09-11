@@ -21,6 +21,7 @@ from movie_maker.media import (
 )
 from movie_maker.preview import PlaybackClock, ui_milliseconds
 from movie_maker.project import (
+    AudioLevel,
     Canvas,
     Clip,
     CommandError,
@@ -432,6 +433,16 @@ class MockController(QObject):
                         else None
                     ),
                     playback_rate=PlaybackRate(rate.numerator, rate.denominator),
+                    audio_level=(
+                        AudioLevel(mock_clip.volume)
+                        if core_track in {CoreTrackKind.VISUAL, CoreTrackKind.MUSIC}
+                        else AudioLevel()
+                    ),
+                    audio_muted=(
+                        mock_clip.muted
+                        if core_track in {CoreTrackKind.VISUAL, CoreTrackKind.MUSIC}
+                        else False
+                    ),
                 )
             )
         return Project(
@@ -465,6 +476,13 @@ class MockController(QObject):
                 else None
             )
             and mock_clip.speed == float(exact_clip.playback_rate.fraction)
+            and (
+                exact_clip.track is CoreTrackKind.NARRATION
+                or (
+                    mock_clip.volume == exact_clip.audio_level.percent
+                    and mock_clip.muted is exact_clip.audio_muted
+                )
+            )
         )
 
     @staticmethod
@@ -520,6 +538,8 @@ class MockController(QObject):
                             else None
                         ),
                         speed=float(clip.playback_rate.fraction),
+                        volume=clip.audio_level.percent,
+                        muted=clip.audio_muted,
                     )
                 )
         missing_count = sum(asset.status is AssetStatus.MISSING for asset in assets.values())
@@ -595,6 +615,8 @@ class MockController(QObject):
                     else None
                 )
                 projected.speed = float(clip.playback_rate.fraction)
+                projected.volume = clip.audio_level.percent
+                projected.muted = clip.audio_muted
                 target_lists[ui_track].append(projected)
 
         self.state.visual_clips = target_lists[TrackKind.VISUAL]
@@ -1283,14 +1305,14 @@ class MockController(QObject):
                     if is_video
                     else None
                 ),
+                audio_level=AudioLevel(volume) if is_video else None,
+                audio_muted=muted if is_video else None,
             )
         if self._execute_core(command, "클립 속성을 적용했습니다") is None:
             return False
         updated = self.selected_clip
         if updated is None:
             return False
-        updated.volume = volume
-        updated.muted = muted
         if fit_mode is not None and updated.track is TrackKind.VISUAL:
             updated.fit_mode = fit_mode
         if effect is not None and updated.track is TrackKind.VISUAL:
@@ -1321,6 +1343,9 @@ class MockController(QObject):
         if start_ms < 0:
             self._set_status("오디오 클립 시작 위치는 0보다 작을 수 없습니다")
             return False
+        if not 0 <= volume <= 100:
+            self._set_status("음량은 0~100% 범위여야 합니다")
+            return False
         asset = self.asset_for_clip(clip)
         source_limit = asset.duration_ms if asset is not None else None
         if source_in_ms < 0 or source_out_ms <= source_in_ms or (
@@ -1338,6 +1363,8 @@ class MockController(QObject):
             source_in=ProjectTime.from_milliseconds(source_in_ms),
             source_out=ProjectTime.from_milliseconds(source_out_ms),
             timeline_start=ProjectTime.from_milliseconds(start_ms),
+            audio_level=(AudioLevel(volume) if clip.track is TrackKind.MUSIC else None),
+            audio_muted=(muted if clip.track is TrackKind.MUSIC else None),
             history_label="오디오 속성 적용",
         )
         if self._execute_core(command, "오디오 타이밍 속성을 적용했습니다") is None:
@@ -1345,8 +1372,9 @@ class MockController(QObject):
         updated = self.selected_clip
         if updated is None:
             return False
-        updated.volume = min(100, max(0, volume))
-        updated.muted = muted
+        if clip.track is TrackKind.NARRATION:
+            updated.volume = volume
+            updated.muted = muted
         updated.fade_in_ms = fade_in_ms
         updated.fade_out_ms = fade_out_ms
         updated.ducking = ducking

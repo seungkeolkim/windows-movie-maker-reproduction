@@ -9,6 +9,7 @@ from movie_maker.project.commands import CommandApplication, CommandRejected
 from movie_maker.project.model import (
     NORMAL_PLAYBACK_RATE,
     ZERO_TIME,
+    AudioLevel,
     Canvas,
     Clip,
     MediaKind,
@@ -484,6 +485,8 @@ class UpdateClipTiming:
     photo_duration: ProjectTime | None = None
     playback_rate: PlaybackRate | None = None
     timeline_start: ProjectTime | None = None
+    audio_level: AudioLevel | None = None
+    audio_muted: bool | None = None
     history_label: str = "클립 속성 적용"
 
     @property
@@ -499,6 +502,8 @@ class UpdateClipTiming:
                 raise CommandRejected("사진에는 원본 시작과 끝을 지정할 수 없습니다.")
             if self.playback_rate is not None:
                 raise CommandRejected("사진에는 재생 속도를 지정할 수 없습니다.")
+            if self.audio_level is not None or self.audio_muted is not None:
+                raise CommandRejected("사진에는 오디오 속성을 지정할 수 없습니다.")
             if self.photo_duration is None:
                 raise CommandRejected("변경할 사진 표시 시간을 입력하세요.")
             if not MIN_PHOTO_DURATION <= self.photo_duration <= MAX_PHOTO_DURATION:
@@ -549,6 +554,34 @@ class UpdateClipTiming:
                 playback_rate=rate,
             )
 
+            if self.audio_level is not None or self.audio_muted is not None:
+                if not (
+                    media.kind is MediaKind.VIDEO
+                    or track.kind is TrackKind.MUSIC
+                ):
+                    raise CommandRejected(
+                        "오디오 속성은 영상 원본음과 음악 클립에서만 변경할 수 있습니다."
+                    )
+                if self.audio_level is not None and not isinstance(
+                    self.audio_level, AudioLevel
+                ):
+                    raise CommandRejected("음량 값이 유효하지 않습니다.")
+                if self.audio_muted is not None and type(self.audio_muted) is not bool:
+                    raise CommandRejected("음소거 값이 유효하지 않습니다.")
+                replacement = replace(
+                    replacement,
+                    audio_level=(
+                        self.audio_level
+                        if self.audio_level is not None
+                        else clip.audio_level
+                    ),
+                    audio_muted=(
+                        self.audio_muted
+                        if self.audio_muted is not None
+                        else clip.audio_muted
+                    ),
+                )
+
         if self.timeline_start is not None:
             if self.timeline_start.nanoseconds < 0:
                 raise CommandRejected("클립 시작 위치는 0보다 작을 수 없습니다.")
@@ -560,6 +593,29 @@ class UpdateClipTiming:
             raise CommandRejected("입력한 값이 현재 클립 속성과 같습니다.")
         command = _ReplaceOneClip(clip, replacement, self.history_label)
         return command.apply(project)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateClipAudio:
+    """Atomically change persisted level and mute without altering clip timing."""
+
+    clip_id: str
+    audio_level: AudioLevel | None = None
+    audio_muted: bool | None = None
+
+    @property
+    def label(self) -> str:
+        return "오디오 속성 적용"
+
+    def apply(self, project: Project) -> CommandApplication:
+        if self.audio_level is None and self.audio_muted is None:
+            raise CommandRejected("변경할 오디오 속성을 입력하세요.")
+        return UpdateClipTiming(
+            self.clip_id,
+            audio_level=self.audio_level,
+            audio_muted=self.audio_muted,
+            history_label=self.label,
+        ).apply(project)
 
 
 @dataclass(frozen=True, slots=True)

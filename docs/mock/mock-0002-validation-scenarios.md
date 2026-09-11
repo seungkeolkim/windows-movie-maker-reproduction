@@ -11,12 +11,14 @@
 ## 목적
 
 이 문서는 W-02 실제 미디어 보관함, W-03 실제 프로젝트 파일, W-04 실제 타임라인 편집,
-W-05 실제 시각 미리 보기와 고정 샘플 데이터를 함께 사용해 MVP·1.0의 대표 흐름, 빈 상태,
+W-05 실제 시각 미리 보기, W-06 실제 오디오 미리 듣기와 고정 샘플 데이터를 함께 사용해
+MVP·1.0의 대표 흐름, 빈 상태,
 오류 상태와 반응형 레이아웃을 같은 절차로 다시 검증하기 위한 기준이다. 통과 결과는
 [MOCK-0003](mock-0003-review-log.md)에 기록한다.
 
-목업 통과는 실제 오디오 믹싱 또는 MP4 출력이 구현됐다는 뜻이 아니다. 프로젝트 직렬화는
-W-03, MVP 타임라인 편집은 W-04, 시각 프레임 디코딩은 W-05에서 실제 서비스로 교체됐다.
+목업 통과는 MP4 출력이나 내레이션·파형·페이드가 구현됐다는 뜻이 아니다. 프로젝트 직렬화는
+W-03, MVP 타임라인 편집은 W-04, 시각 프레임은 W-05, 원본음·음악 믹싱은 W-06에서 실제
+서비스로 교체됐다.
 현재 검증 대상은 기능 발견 가능성, 화면 배치, 입력에 따른 상태 변화, 피드백과 실제 서비스로
 교체할 경계다.
 
@@ -30,7 +32,7 @@ uv --managed-python run --locked --no-sync -- movie-maker
 
 메뉴의 `목업 상태`에서 빈 프로젝트, 샘플 편집 프로젝트, 누락 미디어, 부분 가져오기 실패,
 출력 실패, 자동 저장 복구, 온보딩과 런타임 상태를 직접 재현할 수 있다. `목업`, `목업 값`
-표시는 오디오·출력 등 후속 기능을 실제 처리 결과로 오해하지 않게 계속 노출한다.
+표시는 출력과 1.0 오디오 기능 등 후속 기능을 실제 처리 결과로 오해하지 않게 계속 노출한다.
 
 자동 검증과 기준 화면 캡처는 다음 명령을 사용한다.
 
@@ -46,8 +48,9 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 | 화면과 사용자 의도 전달 | `src/movie_maker/ui/main_window.py` | 유지하며 서비스 호출 어댑터만 교체 |
 | 보조 화면과 대화상자 | `src/movie_maker/ui/dialogs.py` | 프로젝트 파일 선택, 장치 및 작업 서비스 연결 |
 | 고정 샘플 상태 구조 | `src/movie_maker/ui/mock_model.py` | 프로젝트·미디어 도메인 모델 |
-| 실제 보관함·프로젝트 파일·타임라인·재생 시간과 가짜 후속 상태의 경계 | `src/movie_maker/ui/mock_controller.py` | 믹싱 및 출력 서비스 |
-| 실제 source 프레임 계산·디코딩·최신 요청 취소 | `src/movie_maker/preview/`, `src/movie_maker/ui/preview.py` | W-06 오디오와 W-07 출력에서 시간 매핑 재사용 |
+| 실제 보관함·프로젝트 파일·타임라인·재생 시간·오디오 속성과 가짜 후속 상태의 경계 | `src/movie_maker/ui/mock_controller.py` | 출력 및 1.0 서비스 |
+| 실제 source 프레임 계산·디코딩·최신 요청 취소 | `src/movie_maker/preview/`, `src/movie_maker/ui/preview.py` | W-07 출력에서 시간 매핑 재사용 |
+| 실제 원본음·음악 그래프, PCM 디코딩·장치와 최신 요청 취소 | `src/movie_maker/audio/`, `src/movie_maker/ui/audio.py` | W-07 출력에서 공통 그래프 재사용 |
 | UI 및 상태 회귀 검증 | `tests/ui/` | 실제 서비스 계약 테스트와 함께 유지·확장 |
 
 위젯은 목업 상태를 직접 수정하지 않는다. 사용자 입력은 `MockController`의 의도 메서드로
@@ -196,6 +199,7 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 3. 끝까지 재생한 뒤 다시 재생한다.
 4. 미리 보기 음소거를 켜고 끈다.
 5. 이전·다음 프레임 버튼을 눌러 원본 프레임률 또는 time base 경계 이동을 확인한다.
+6. 영상 원본음 음량·음소거와 음악 시작·사용 구간·음량을 바꾸고 다시 재생한다.
 
 합격 기준:
 
@@ -203,12 +207,14 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 - 시간, 미리 보기 장면과 타임라인 재생 헤드가 같은 위치를 표시한다.
 - 끝에서 다시 재생하면 0초로 돌아가며 프로젝트 설정 음량은 바뀌지 않는다.
 - source in과 재생 속도가 반영된 실제 영상·사진 프레임을 표시한다.
+- 같은 source in·속도와 프로젝트 위치가 영상 원본음과 음악에도 반영된다.
+- 미리 보기 음소거는 저장된 클립 음량을 바꾸지 않고 탐색·편집은 오래된 오디오를 취소한다.
 - 23.976/29.97/59.94fps도 절대 프레임 인덱스에서 계산해 누적 오차가 없다.
 - 빠른 연속 탐색과 프로젝트 교체에서는 오래된 프레임이 표시되지 않는다.
 - 누락·손상·미지원 미디어는 원인과 다음 행동을 표시하고 편집 상태를 바꾸지 않는다.
 
-자동 검증: `tests/preview/`, `test_preview_playback_integration.py`와
-`test_empty_preview_explains_next_action`.
+자동 검증: `tests/preview/`, `tests/audio/`, `test_preview_playback_integration.py`,
+`test_audio_playback_integration.py`와 `test_empty_preview_explains_next_action`.
 
 ### V-MVP-08: 출력 설정, 완료와 취소
 

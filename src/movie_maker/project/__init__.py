@@ -18,6 +18,8 @@ from movie_maker.project.commands import (
 )
 from movie_maker.project.model import (
     CURRENT_PROJECT_SCHEMA_VERSION,
+    DEFAULT_AUDIO_LEVEL,
+    AudioLevel,
     Canvas,
     Clip,
     MediaKind,
@@ -45,6 +47,8 @@ from movie_maker.project.time import FrameRate, ProjectTime, TimeRounding
 
 __all__ = [
     "CURRENT_PROJECT_SCHEMA_VERSION",
+    "DEFAULT_AUDIO_LEVEL",
+    "AudioLevel",
     "Canvas",
     "Clip",
     "CommandApplication",

@@ -96,6 +96,28 @@ ZERO_TIME = ProjectTime.zero()
 
 
 @dataclass(frozen=True, slots=True)
+class AudioLevel:
+    """A deterministic persisted gain percentage for one audible clip."""
+
+    percent: int = 100
+
+    def __post_init__(self) -> None:
+        if type(self.percent) is not int:
+            raise TypeError("Audio level percent must be an integer.")
+        if not 0 <= self.percent <= 100:
+            raise ProjectValidationError("Audio level percent must be between 0 and 100.")
+
+    @property
+    def fraction(self) -> Fraction:
+        """Return the exact gain multiplier."""
+
+        return Fraction(self.percent, 100)
+
+
+DEFAULT_AUDIO_LEVEL = AudioLevel()
+
+
+@dataclass(frozen=True, slots=True)
 class MediaTimeBase:
     """The exact number of seconds represented by one source timestamp unit."""
 
@@ -265,6 +287,8 @@ class Clip:
     source_in: ProjectTime = ZERO_TIME
     source_out: ProjectTime | None = None
     playback_rate: PlaybackRate = NORMAL_PLAYBACK_RATE
+    audio_level: AudioLevel = DEFAULT_AUDIO_LEVEL
+    audio_muted: bool = False
 
     def __post_init__(self) -> None:
         _require_text(self.clip_id, "clip_id")
@@ -278,6 +302,10 @@ class Clip:
             _require_time(self.source_out, "source_out")
         if not isinstance(self.playback_rate, PlaybackRate):
             raise ProjectValidationError("playback_rate must be a PlaybackRate value.")
+        if not isinstance(self.audio_level, AudioLevel):
+            raise ProjectValidationError("audio_level must be an AudioLevel value.")
+        if type(self.audio_muted) is not bool:
+            raise ProjectValidationError("audio_muted must be a boolean value.")
         if timeline_start.nanoseconds < 0:
             raise ProjectValidationError("Clip timeline start cannot be negative.")
         if duration.nanoseconds <= 0:
@@ -294,6 +322,8 @@ class Clip:
                 raise ProjectValidationError("Text clips cannot define a source range.")
             if self.playback_rate != NORMAL_PLAYBACK_RATE:
                 raise ProjectValidationError("Text clips cannot define a playback rate.")
+            if self.audio_level != DEFAULT_AUDIO_LEVEL or self.audio_muted:
+                raise ProjectValidationError("Text clips cannot define audio properties.")
         else:
             if self.asset_id is None:
                 raise ProjectValidationError("Media clips require an asset_id.")
@@ -432,6 +462,16 @@ class Project:
                 ):
                     raise ProjectValidationError(
                         "Photo clips cannot define a source range or playback rate."
+                    )
+                if source.kind is MediaKind.PHOTO and (
+                    clip.audio_level != DEFAULT_AUDIO_LEVEL or clip.audio_muted
+                ):
+                    raise ProjectValidationError("Photo clips cannot define audio properties.")
+                if track.kind is TrackKind.NARRATION and (
+                    clip.audio_level != DEFAULT_AUDIO_LEVEL or clip.audio_muted
+                ):
+                    raise ProjectValidationError(
+                        "Narration clips cannot define audio properties before W-09."
                     )
 
             if track.kind is TrackKind.VISUAL:
