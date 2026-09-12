@@ -1,5 +1,13 @@
 """UI-independent timeline editing commands."""
 
+from movie_maker.timeline.advanced import (
+    DeleteClipGroup,
+    DuplicateTimelineClip,
+    MoveAbsoluteClipGroup,
+    MoveVisualClipGroup,
+    TimelineEditErrorCode,
+    TimelineEditRejected,
+)
 from movie_maker.timeline.editing import (
     DEFAULT_PHOTO_DURATION,
     MAX_PHOTO_DURATION,
@@ -27,11 +35,17 @@ __all__ = [
     "MIN_SPLIT_DURATION",
     "MIN_TIMED_CLIP_DURATION",
     "AddMediaClip",
+    "DeleteClipGroup",
     "DeleteTimelineClip",
+    "DuplicateTimelineClip",
+    "MoveAbsoluteClipGroup",
     "MoveVisualClip",
+    "MoveVisualClipGroup",
     "SetPhotoDuration",
     "SetPlaybackRate",
     "SplitClip",
+    "TimelineEditErrorCode",
+    "TimelineEditRejected",
     "TrimClipEnd",
     "TrimClipStart",
     "UpdateClipAudio",

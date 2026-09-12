@@ -39,10 +39,17 @@ from movie_maker.project.model import MediaKind as CoreMediaKind
 from movie_maker.project.model import TrackKind as CoreTrackKind
 from movie_maker.timeline import (
     AddMediaClip,
-    DeleteTimelineClip,
-    MoveVisualClip,
+    DeleteClipGroup,
+    DuplicateTimelineClip,
+    MoveAbsoluteClipGroup,
+    MoveVisualClipGroup,
     SplitClip,
     UpdateClipTiming,
+)
+from movie_maker.timeline.session import (
+    TimelineSelection,
+    TimelineViewMode,
+    normalise_timeline_zoom,
 )
 from movie_maker.ui.mock_model import (
     AssetStatus,
@@ -628,12 +635,11 @@ class MockController(QObject):
         self.state.canvas_height = project.canvas.height
         self.state.reference_asset_id = project.canvas.reference_asset_id
 
-        existing_ids = {clip.clip_id for clip in self.state.all_clips}
-        if self.state.selected_clip_id not in existing_ids:
-            self.state.selected_clip_id = None
-        self.state.selected_clip_ids = [
-            clip_id for clip_id in self.state.selected_clip_ids if clip_id in existing_ids
-        ]
+        selection = TimelineSelection(
+            tuple(self.state.selected_clip_ids),
+            self.state.selected_clip_id,
+        ).reconcile(project)
+        self._apply_selection(selection)
         if self.state.selected_asset_id not in self.state.assets:
             self.state.selected_asset_id = None
         self.state.playhead_ms = min(
@@ -913,8 +919,16 @@ class MockController(QObject):
         clip = next((item for item in self.state.all_clips if item.clip_id == clip_id), None)
         if clip_id is not None and clip is None:
             return
-        self.state.selected_clip_id = clip_id
-        self.state.selected_clip_ids = [clip_id] if clip_id is not None else []
+        selection = (
+            TimelineSelection()
+            if clip_id is None
+            else TimelineSelection.from_project(
+                self._media_library.project,
+                (clip_id,),
+                clip_id,
+            )
+        )
+        self._apply_selection(selection)
         self.state.selected_asset_id = None
         if clip is None:
             self._set_status("타임라인 선택을 해제했습니다")
@@ -929,18 +943,28 @@ class MockController(QObject):
             self._set_status(f"{clip.label} 클립 선택")
         self.state_changed.emit()
 
-    def select_clips(self, clip_ids: list[str], active_clip_id: str | None) -> None:
+    def _apply_selection(self, selection: TimelineSelection) -> None:
+        self.state.selected_clip_ids = list(selection.clip_ids)
+        self.state.selected_clip_id = selection.active_clip_id
+
+    def select_clips(self, clip_ids: list[str], active_clip_id: str | None) -> bool:
         existing = {clip.clip_id: clip for clip in self.state.all_clips}
-        valid_ids = [clip_id for clip_id in clip_ids if clip_id in existing]
-        if active_clip_id not in valid_ids:
-            active_clip_id = valid_ids[-1] if valid_ids else None
-        self.state.selected_clip_ids = valid_ids
-        self.state.selected_clip_id = active_clip_id
+        try:
+            selection = TimelineSelection.from_project(
+                self._media_library.project,
+                tuple(clip_ids),
+                active_clip_id,
+            )
+        except ValueError as error:
+            self._set_status(f"여러 클립을 선택할 수 없습니다 · {error}")
+            self.state_changed.emit()
+            return False
+        self._apply_selection(selection)
         self.state.selected_asset_id = None
-        if not valid_ids:
+        if not selection.clip_ids:
             self._set_status("타임라인 선택을 해제했습니다")
-        elif len(valid_ids) == 1 and active_clip_id is not None:
-            clip = existing[active_clip_id]
+        elif len(selection.clip_ids) == 1 and selection.active_clip_id is not None:
+            clip = existing[selection.active_clip_id]
             if clip.track is TrackKind.VISUAL:
                 try:
                     exact_clip = self._media_library.project.clip(clip.clip_id)
@@ -950,8 +974,11 @@ class MockController(QObject):
                     self._seek_preview(exact_clip.timeline_start)
             self._set_status(f"{clip.label} 클립 선택")
         else:
-            self._set_status(f"클립 {len(valid_ids)}개 선택 · 공통 명령만 사용할 수 있습니다")
+            self._set_status(
+                f"클립 {len(selection.clip_ids)}개 선택 · 공통 명령만 사용할 수 있습니다"
+            )
         self.state_changed.emit()
+        return True
 
     def add_selected_to_timeline(self, *, narration: bool = False) -> bool:
         asset = self.selected_asset
@@ -1136,65 +1163,125 @@ class MockController(QObject):
         return True
 
     def move_selected_visual(self, offset: int) -> bool:
-        clip = self.selected_clip
-        if len(self.selected_clips) != 1 or clip is None or clip.track is not TrackKind.VISUAL:
+        selected = self.selected_clips
+        if not selected or any(clip.track is not TrackKind.VISUAL for clip in selected):
             self._set_status("이동할 영상 또는 사진 클립을 선택하세요")
             return False
-        index = self.state.visual_clips.index(clip)
-        target = index + offset
-        if target < 0 or target >= len(self.state.visual_clips):
+        if offset not in {-1, 1}:
+            self._set_status("클립 이동은 한 단계씩 수행해야 합니다")
+            return False
+        selected_ids = {clip.clip_id for clip in selected}
+        first = min(self.state.visual_clips.index(clip) for clip in selected)
+        current_insertion = sum(
+            clip.clip_id not in selected_ids for clip in self.state.visual_clips[:first]
+        )
+        target = current_insertion + offset
+        remaining_count = len(self.state.visual_clips) - len(selected)
+        if target < 0 or target > remaining_count:
             self._set_status("선택한 클립은 더 이동할 수 없습니다")
             return False
 
         direction = "앞으로" if offset < 0 else "뒤로"
         return (
             self._execute_core(
-                MoveVisualClip(
-                    clip.clip_id,
+                MoveVisualClipGroup(
+                    tuple(clip.clip_id for clip in selected),
                     target,
-                    history_label=f"클립 {direction} 이동",
+                    history_label=(
+                        f"클립 {direction} 이동"
+                        if len(selected) == 1
+                        else f"클립 {len(selected)}개 {direction} 이동"
+                    ),
                 ),
-                f"클립을 {direction} 이동했습니다",
+                f"클립 {len(selected)}개를 {direction} 이동했습니다",
             )
             is not None
         )
+
+    def move_selected_absolute(self, delta_ms: int) -> bool:
+        selected = self.selected_clips
+        if not selected or any(clip.track is TrackKind.VISUAL for clip in selected):
+            self._set_status("시간으로 이동할 보조 트랙 클립을 선택하세요")
+            return False
+        if type(delta_ms) is not int or delta_ms == 0:
+            self._set_status("0이 아닌 정수 밀리초 이동값이 필요합니다")
+            return False
+        return (
+            self._execute_core(
+                MoveAbsoluteClipGroup(
+                    tuple(clip.clip_id for clip in selected),
+                    ProjectTime.from_milliseconds(delta_ms),
+                    history_label=f"클립 {len(selected)}개 시간 이동",
+                ),
+                f"클립 {len(selected)}개를 {delta_ms:+d}ms 이동했습니다",
+            )
+            is not None
+        )
+
+    def move_selected_to_index(self, track: TrackKind, target_index: int) -> bool:
+        """Commit one validated visual drag/drop result."""
+
+        selected = self.selected_clips
+        if track is not TrackKind.VISUAL or not selected:
+            self._set_status("시각 클립만 삽입 위치로 끌어 이동할 수 있습니다")
+            return False
+        if any(clip.track is not track for clip in selected):
+            self._set_status("선택과 놓기 위치의 트랙이 일치하지 않습니다")
+            return False
+        return (
+            self._execute_core(
+                MoveVisualClipGroup(
+                    tuple(clip.clip_id for clip in selected),
+                    target_index,
+                    history_label=f"클립 {len(selected)}개 끌어 이동",
+                ),
+                f"클립 {len(selected)}개를 새 삽입 위치로 이동했습니다",
+            )
+            is not None
+        )
+
+    def move_selected_absolute_to_index(self, track: TrackKind, target_index: int) -> bool:
+        """Translate one auxiliary-track selection to a drag insertion anchor."""
+
+        selected = self.selected_clips
+        if track is TrackKind.VISUAL or not selected or any(clip.track is not track for clip in selected):
+            self._set_status("선택과 놓기 위치의 보조 트랙이 일치하지 않습니다")
+            return False
+        selected_ids = {clip.clip_id for clip in selected}
+        remaining = [
+            clip for clip in self.clips_for_track(track) if clip.clip_id not in selected_ids
+        ]
+        if type(target_index) is not int or not 0 <= target_index <= len(remaining):
+            self._set_status("그룹을 놓을 위치가 트랙 범위를 벗어났습니다")
+            return False
+        if not remaining:
+            self._set_status("클립이 이미 이 트랙의 유일한 그룹입니다")
+            return False
+        target_start = (
+            remaining[target_index].start_ms
+            if target_index < len(remaining)
+            else max(clip.start_ms + clip.duration_ms for clip in remaining)
+        )
+        anchor_start = min(clip.start_ms for clip in selected)
+        return self.move_selected_absolute(target_start - anchor_start)
 
     def delete_selected_clip(self) -> bool:
         selected = self.selected_clips
         if not selected:
             self._set_status("삭제할 타임라인 클립을 선택하세요")
             return False
-        selected_ids = {clip.clip_id for clip in selected}
-
-        if len(selected) == 1:
-            clip = selected[0]
-            if self._execute_core(
-                DeleteTimelineClip(clip.clip_id),
-                "클립을 삭제했습니다 · 보관함과 원본 파일은 유지됩니다",
-            ) is None:
-                return False
-            self.state.selected_clip_id = None
-            self.state.selected_clip_ids.clear()
-            self._playback.sync_project(self._media_library.project)
-            self.state.playhead_ms = ui_milliseconds(self._playback.position)
-            self._publish()
-            return True
-
-        def operation() -> None:
-            for track in TrackKind:
-                clips = self.clips_for_track(track)
-                clips[:] = [clip for clip in clips if clip.clip_id not in selected_ids]
-            self.state.selected_clip_id = None
-            self.state.selected_clip_ids.clear()
-            valid_ids = {item.clip_id for item in self.state.visual_clips}
-            self.state.transitions = {
-                boundary: value
-                for boundary, value in self.state.transitions.items()
-                if all(item in valid_ids for item in boundary.split("|"))
-            }
-
         label = "클립 삭제" if len(selected) == 1 else f"클립 {len(selected)}개 삭제"
-        self._execute_edit(label, operation)
+        if self._execute_core(
+            DeleteClipGroup(
+                tuple(clip.clip_id for clip in selected),
+                history_label=label,
+            ),
+            f"{label} · 보관함과 원본 파일은 유지됩니다",
+        ) is None:
+            return False
+        self._playback.sync_project(self._media_library.project)
+        self.state.playhead_ms = ui_milliseconds(self._playback.position)
+        self._publish()
         return True
 
     def split_selected_clip(self) -> bool:
@@ -1233,18 +1320,24 @@ class MockController(QObject):
         if len(self.selected_clips) != 1 or clip is None:
             self._set_status("복제할 클립을 선택하세요")
             return False
-        duplicate = deepcopy(clip)
-        duplicate.clip_id = self._next_id("clip")
-        duplicate.label = f"{clip.label} 복제본"
-
-        def operation() -> None:
-            clips = self.clips_for_track(clip.track)
-            index = clips.index(clip)
-            clips.insert(index + 1, duplicate)
-            self.state.selected_clip_id = duplicate.clip_id
-            self.state.selected_clip_ids = [duplicate.clip_id]
-
-        self._execute_edit("클립 복제", operation)
+        try:
+            duplicate_id = self._next_clip_id()
+        except ValueError as error:
+            self._set_status(f"클립을 복제할 수 없습니다 · {error}")
+            return False
+        if self._execute_core(
+            DuplicateTimelineClip(clip.clip_id, duplicate_id),
+            "클립을 원본 바로 뒤에 복제했습니다",
+        ) is None:
+            return False
+        self._apply_selection(
+            TimelineSelection.from_project(
+                self._media_library.project,
+                (duplicate_id,),
+                duplicate_id,
+            )
+        )
+        self._publish()
         return True
 
     def update_selected_clip(
@@ -1621,15 +1714,32 @@ class MockController(QObject):
         self._execute_edit("프로젝트 화면 변경", operation)
         return True
 
-    def set_timeline_mode(self, mode: str) -> None:
-        self.state.timeline_mode = mode
-        self._set_status(f"{mode} 보기 · 편집 내용은 유지됩니다")
+    def set_timeline_mode(self, mode: str) -> bool:
+        clean_mode = mode.split(" ·", maxsplit=1)[0]
+        try:
+            selected_mode = TimelineViewMode(clean_mode)
+        except ValueError:
+            self._set_status("지원하지 않는 타임라인 보기입니다")
+            return False
+        if self.state.timeline_mode == selected_mode.value:
+            return True
+        self.state.timeline_mode = selected_mode.value
+        self._set_status(f"{selected_mode.value} 보기 · 편집 내용은 유지됩니다")
         self.state_changed.emit()
+        return True
 
-    def set_timeline_zoom(self, zoom: int) -> None:
-        self.state.timeline_zoom = min(200, max(50, zoom))
+    def set_timeline_zoom(self, zoom: int) -> bool:
+        try:
+            normalised = normalise_timeline_zoom(zoom)
+        except TypeError as error:
+            self._set_status(str(error))
+            return False
+        if self.state.timeline_zoom == normalised:
+            return True
+        self.state.timeline_zoom = normalised
         self._set_status(f"타임라인 확대 {self.state.timeline_zoom}%")
         self.state_changed.emit()
+        return True
 
     def seek(self, position_ms: int) -> None:
         self._seek_preview(ProjectTime.from_milliseconds(position_ms))

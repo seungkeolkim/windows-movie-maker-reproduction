@@ -51,6 +51,7 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 | 실제 보관함·프로젝트 파일·타임라인·재생 시간·오디오 속성과 가짜 후속 상태의 경계 | `src/movie_maker/ui/mock_controller.py` | 출력 및 1.0 서비스 |
 | 실제 source 프레임 계산·디코딩·최신 요청 취소 | `src/movie_maker/preview/`, `src/movie_maker/ui/preview.py` | W-07 출력에서 시간 매핑 재사용 |
 | 실제 원본음·음악 그래프, PCM 디코딩·장치와 최신 요청 취소 | `src/movie_maker/audio/`, `src/movie_maker/ui/audio.py` | W-07 출력에서 공통 그래프 재사용 |
+| 실제 고급 타임라인 명령, 선택·보기 세션 상태 | `src/movie_maker/timeline/advanced.py`, `src/movie_maker/timeline/session.py` | W-09 인접 관계 정리 경계 재사용 |
 | UI 및 상태 회귀 검증 | `tests/ui/` | 실제 서비스 계약 테스트와 함께 유지·확장 |
 
 위젯은 목업 상태를 직접 수정하지 않는다. 사용자 입력은 `MockController`의 의도 메서드로
@@ -251,6 +252,7 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 
 - 다중 선택은 선택 수와 공통 명령만 표시하며 서로 다른 트랙을 암묵적으로 묶지 않는다.
 - 실행 취소와 다시 실행 메뉴는 다음 행동의 이름을 표시한다.
+- 복제·그룹 이동·삭제는 실제 명령 하나로 실행되며 보기·확대는 프로젝트와 이력을 바꾸지 않는다.
 - 실행 취소 뒤 새 편집을 하면 이전 다시 실행 후보가 사라진다.
 - 보기와 확대 변경은 프로젝트 편집 내용이나 행동 이력을 바꾸지 않는다.
 

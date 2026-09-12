@@ -27,7 +27,8 @@
 | 18 | [DESIGN-0007: 미리 보기 시간축과 디코딩 계약](design/design-0007-preview-playback-contract.md) | W-05 시간 변환, 실제 프레임 디코딩, 동시성·취소와 오류 경계 |
 | 19 | [DESIGN-0008: 원본음·음악 믹싱 계약](design/design-0008-audio-mixing-contract.md) | W-06 오디오 상태, 공통 FFmpeg 그래프, 미리 듣기·취소와 장치 경계 |
 | 20 | [DESIGN-0009: FFmpeg MP4 출력 계약](design/design-0009-mp4-export-contract.md) | W-07 렌더 계획, 진행·취소, 검증과 안전한 파일 게시 |
-| 21 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
+| 21 | [DESIGN-0010: 고급 타임라인과 세션 행동 계약](design/design-0010-advanced-timeline-contract.md) | W-08 선택, 그룹 명령, 리플, 보기·확대와 키보드 경계 |
+| 22 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
 
 제품 방향만 파악할 때는 1~4번을 읽는다. 화면을 변경하려면 DESIGN과 MOCK 문서까지, 실제
 로직을 연결하려면 MOCK-0003의 연결 순서와 관련 ADR까지 읽는다. 정책 문서는 미디어, 출력,
@@ -89,9 +90,10 @@
 | `W-05` 미리 보기 시간축과 디코딩 | 완료 | [DESIGN-0007](design/design-0007-preview-playback-contract.md), [미리 보기 소스](../src/movie_maker/preview/), [미리 보기 테스트](../tests/preview/) |
 | `W-06` 원본음·음악 믹싱 | 완료 | [DESIGN-0008](design/design-0008-audio-mixing-contract.md), [오디오 소스](../src/movie_maker/audio/), [오디오 테스트](../tests/audio/) |
 | `W-07` FFmpeg MP4 출력 | 완료 | [DESIGN-0009](design/design-0009-mp4-export-contract.md), [출력 소스](../src/movie_maker/exporting/), [출력 테스트](../tests/exporting/) |
+| `W-08` 고급 타임라인과 행동 이력 UI | 완료 | [DESIGN-0010](design/design-0010-advanced-timeline-contract.md), [고급 명령](../src/movie_maker/timeline/advanced.py), [통합 테스트](../tests/ui/test_advanced_timeline_integration.py) |
 
-W-08 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순서와 검증 기준은 MOCK-0003을
-따른다. W-07도 DB를 추가하지 않고 불변 프로젝트 스냅샷과 같은 폴더 임시 MP4만 사용한다.
+W-09 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순서와 검증 기준은 MOCK-0003을
+따른다. W-08도 DB나 프로젝트 스키마를 추가하지 않고 불변 프로젝트 명령과 세션 상태만 쓴다.
 
 ## 카테고리와 파일명 규칙
 
