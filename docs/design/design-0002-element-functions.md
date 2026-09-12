@@ -207,8 +207,9 @@ UI 구조와 분리해 같은 용어를 메뉴, 상태와 대화상자에서 재
 
 | 요소 | 범위 | 표시 내용과 상세 기능 | 주요 상태 | 연결 기능 |
 | --- | --- | --- | --- | --- |
-| `E-TIMELINE-MODE` | 1.0 | 스토리보드/타임라인 전환 | 두 보기 중 하나 선택 | `F-TIMELINE-13` |
-| `E-TIMELINE-RULER` | MVP | 시간 눈금과 클릭 탐색 | 확대 수준별 눈금 | `F-PREVIEW-03`, `F-TIMELINE-14` |
+| `E-TIMELINE-MODE` | 1.0 | 같은 프로젝트·선택을 쓰는 스토리보드/타임라인 전환 | 두 보기 중 하나 선택 | `F-TIMELINE-13` |
+| `E-TIMELINE-STORYBOARD` | 1.0 | 시각 클립 큰 순서 카드와 보조 트랙 개수 요약 | 빈 상태, 단일·다중 선택 | `F-TIMELINE-09`, `F-TIMELINE-13` |
+| `E-TIMELINE-RULER` | MVP | 시간 눈금과 클릭 탐색 | 50~200%, 25% 단계 | `F-PREVIEW-03`, `F-TIMELINE-14` |
 | `E-TIMELINE-PLAYHEAD` | MVP | 현재 시간의 수직선과 손잡이 | 정지, 재생, 끄는 중 | `F-PREVIEW-03` |
 | `E-TIMELINE-VIDEO-TRACK` | MVP | 순차 영상·사진 클립과 전환 | 빈 상태, 채워짐, 누락 | `F-TIMELINE-01`~`10` |
 | `E-TIMELINE-MUSIC-TRACK` | MVP | 배경 음악 클립 | 빈 상태, 채워짐 | `F-AUDIO-03`~`06` |
@@ -231,11 +232,11 @@ UI 구조와 분리해 같은 용어를 메뉴, 상태와 대화상자에서 재
 | `I-TIMELINE-SPLIT` | 분할 버튼, `Ctrl+B` | 한 클립 선택, 재생 헤드가 내부 | 두 클립 생성, 뒤쪽 클립 선택 | `F-TIMELINE-04` |
 | `I-TIMELINE-TRIM-START` | 왼쪽 손잡이 끌기, 값 입력 | 트리밍 가능한 클립 선택 | 미리 보기와 시작·길이 갱신 | `F-TIMELINE-05` |
 | `I-TIMELINE-TRIM-END` | 오른쪽 손잡이 끌기, 값 입력 | 트리밍 가능한 클립 선택 | 미리 보기와 끝·길이 갱신 | `F-TIMELINE-05` |
-| `I-TIMELINE-DUPLICATE` | 클립 메뉴, `Ctrl+D` | 1.0, 클립 선택 | 원본 뒤에 복제본 삽입 | `F-TIMELINE-08` |
-| `I-TIMELINE-UNDO` | 메뉴, 버튼, `Ctrl+Z` | 1.0, 되돌릴 명령 존재 | 이전 상태와 다시 실행 가능 상태 표시 | `F-TIMELINE-11` |
-| `I-TIMELINE-REDO` | 메뉴, 버튼, `Ctrl+Y` | 1.0, 재실행 명령 존재 | 다음 상태와 실행 취소 가능 상태 표시 | `F-TIMELINE-12` |
-| `I-TIMELINE-MODE` | 보기 전환 | 1.0 | 같은 선택·재생 위치를 다른 보기로 표시 | `F-TIMELINE-13` |
-| `I-TIMELINE-ZOOM` | 버튼, 슬라이더, `Ctrl+휠` | 1.0 | 눈금과 클립 폭만 변경 | `F-TIMELINE-14` |
+| `I-TIMELINE-DUPLICATE` | 클립 메뉴, `Ctrl+D` | 클립 하나 선택, 텍스트 입력 포커스 아님 | 실제 명령으로 원본 뒤에 새 ID 복제본 삽입 | `F-TIMELINE-08` |
+| `I-TIMELINE-UNDO` | 메뉴, 버튼, `Ctrl+Z` | 되돌릴 명령 존재, 텍스트 입력 포커스 아님 | 이전 상태와 다시 실행할 행동 이름 표시 | `F-TIMELINE-11` |
+| `I-TIMELINE-REDO` | 메뉴, 버튼, `Ctrl+Y` | 재실행 명령 존재, 텍스트 입력 포커스 아님 | 다음 상태와 실행 취소할 행동 이름 표시 | `F-TIMELINE-12` |
+| `I-TIMELINE-MODE` | 보기 전환, `Ctrl+Shift+V` | 항상 | 같은 선택·재생 위치를 다른 보기로 표시 | `F-TIMELINE-13` |
+| `I-TIMELINE-ZOOM` | 버튼, 슬라이더, `Ctrl+휠` | 타임라인 포커스 | 프로젝트를 바꾸지 않고 눈금과 클립 폭만 변경 | `F-TIMELINE-14` |
 
 ## E-CREATE: 음악, 내레이션, 텍스트와 전환 생성
 

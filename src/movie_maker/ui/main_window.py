@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from importlib.metadata import version
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer, QUrl, qVersion
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal, qVersion
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -20,6 +20,7 @@ from PySide6.QtGui import (
     QPainter,
     QPixmap,
     QResizeEvent,
+    QWheelEvent,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -115,6 +116,49 @@ ExportResultOpener = Callable[[str], bool]
 AUDIO_PREVIEW_CHUNK = ProjectTime.from_seconds(30)
 
 
+class _TimelineListWidget(QListWidget):
+    """A list that previews internal moves and commits only on a valid drop."""
+
+    move_requested = Signal(int)
+    zoom_requested = Signal(int, int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        if event.source() is not self or not self.selectedItems():
+            event.ignore()
+            return
+        selected_rows = {self.row(item) for item in self.selectedItems()}
+        point = event.position().toPoint()
+        raw_row = self.indexAt(point).row()
+        if raw_row < 0:
+            raw_row = self.count()
+        else:
+            item = self.item(raw_row)
+            if point.x() > self.visualItemRect(item).center().x():
+                raw_row += 1
+        target = sum(
+            row not in selected_rows
+            and isinstance(self.item(row).data(Qt.ItemDataRole.UserRole), str)
+            for row in range(raw_row)
+        )
+        event.acceptProposedAction()
+        self.move_requested.emit(target)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            direction = 1 if event.angleDelta().y() > 0 else -1
+            self.zoom_requested.emit(direction, event.position().toPoint().x())
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+
 def _file_patterns(extensions: frozenset[str]) -> str:
     return " ".join(f"*{extension}" for extension in sorted(extensions))
 
@@ -163,7 +207,7 @@ class MainWindow(QMainWindow):
         self._responsive_hidden_inspector = False
         self._dialogs: list[QWidget] = []
         self._actions: dict[str, QAction] = {}
-        self._timeline_lists: dict[TrackKind, QListWidget] = {}
+        self._timeline_lists: dict[TrackKind, _TimelineListWidget] = {}
         self._preview_bridge = PreviewBridge(preview_coordinator, self)
         self._preview_png: bytes | None = None
         self._preview_frame_key: tuple[str, str, str, int, int] | None = None
@@ -357,18 +401,18 @@ class MainWindow(QMainWindow):
         header.addWidget(title)
         self.timeline_mode_combo = QComboBox()
         self.timeline_mode_combo.setObjectName("E-TIMELINE-MODE")
-        self.timeline_mode_combo.addItems(["타임라인", "스토리보드 · 1.0"])
+        self.timeline_mode_combo.addItems(["타임라인", "스토리보드"])
         self.timeline_mode_combo.currentTextChanged.connect(self._change_timeline_mode)
         header.addWidget(self.timeline_mode_combo)
         self.timeline_time = QLabel("00:00.000 / 00:00.000")
         self.timeline_time.setMinimumWidth(150)
         header.addWidget(self.timeline_time)
         header.addStretch()
-        zoom_label = QLabel("확대 · 1.0")
+        zoom_label = QLabel("확대")
         zoom_label.setProperty("role", "caption")
         header.addWidget(zoom_label)
         zoom_out = QPushButton("−")
-        zoom_out.setToolTip("타임라인 축소 · 1.0")
+        zoom_out.setToolTip("타임라인 축소")
         zoom_out.clicked.connect(
             lambda: self.controller.set_timeline_zoom(self.controller.state.timeline_zoom - 25)
         )
@@ -381,7 +425,7 @@ class MainWindow(QMainWindow):
         self.timeline_zoom.sliderMoved.connect(self.controller.set_timeline_zoom)
         header.addWidget(self.timeline_zoom)
         zoom_in = QPushButton("＋")
-        zoom_in.setToolTip("타임라인 확대 · 1.0")
+        zoom_in.setToolTip("타임라인 확대")
         zoom_in.clicked.connect(
             lambda: self.controller.set_timeline_zoom(self.controller.state.timeline_zoom + 25)
         )
@@ -400,11 +444,11 @@ class MainWindow(QMainWindow):
         command_row.addStretch()
         move_back = QPushButton("← 앞")
         move_back.setObjectName("I-TIMELINE-MOVE-BACK")
-        move_back.clicked.connect(lambda: self.controller.move_selected_visual(-1))
+        move_back.clicked.connect(lambda: self._move_selected_keyboard(-1))
         command_row.addWidget(move_back)
         move_forward = QPushButton("뒤 →")
         move_forward.setObjectName("I-TIMELINE-MOVE-FORWARD")
-        move_forward.clicked.connect(lambda: self.controller.move_selected_visual(1))
+        move_forward.clicked.connect(lambda: self._move_selected_keyboard(1))
         command_row.addWidget(move_forward)
         split_button = QPushButton("✂ 분할")
         split_button.setObjectName("I-TIMELINE-SPLIT")
@@ -416,11 +460,19 @@ class MainWindow(QMainWindow):
         command_row.addWidget(delete_button)
         layout.addLayout(command_row)
 
+        self.timeline_views = QStackedWidget()
+        self.timeline_views.setObjectName("E-TIMELINE-VIEWS")
+        timeline_page = QWidget()
+        timeline_layout = QVBoxLayout(timeline_page)
+        timeline_layout.setContentsMargins(0, 0, 0, 0)
+        timeline_layout.setSpacing(5)
+
         self.timeline_ruler = QSlider(Qt.Orientation.Horizontal)
         self.timeline_ruler.setObjectName("E-TIMELINE-RULER")
         self.timeline_ruler.setAccessibleName("타임라인 눈금과 재생 헤드")
+        self.timeline_ruler.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.timeline_ruler.sliderMoved.connect(self._seek_preview)
-        layout.addWidget(self.timeline_ruler)
+        timeline_layout.addWidget(self.timeline_ruler)
 
         for track in TrackKind:
             row = QHBoxLayout()
@@ -428,7 +480,7 @@ class MainWindow(QMainWindow):
             label.setFixedWidth(74)
             label.setObjectName(f"trackLabel-{track.name.lower()}")
             row.addWidget(label)
-            track_list = QListWidget()
+            track_list = _TimelineListWidget()
             track_list.setObjectName(self._track_object_name(track))
             track_list.setFlow(QListView.Flow.LeftToRight)
             track_list.setWrapping(False)
@@ -439,9 +491,56 @@ class MainWindow(QMainWindow):
             track_list.itemSelectionChanged.connect(
                 lambda selected_track=track: self._select_timeline_items(selected_track)
             )
+            track_list.zoom_requested.connect(
+                lambda direction, x, source=track_list: self._zoom_timeline_at(
+                    source, direction, x
+                )
+            )
+            if track is TrackKind.VISUAL:
+                track_list.move_requested.connect(
+                    lambda target: self.controller.move_selected_to_index(
+                        TrackKind.VISUAL, target
+                    )
+                )
+            else:
+                track_list.move_requested.connect(
+                    lambda target, target_track=track: (
+                        self.controller.move_selected_absolute_to_index(
+                            target_track, target
+                        )
+                    )
+                )
             self._timeline_lists[track] = track_list
             row.addWidget(track_list, 1)
-            layout.addLayout(row)
+            timeline_layout.addLayout(row)
+        self.timeline_views.addWidget(timeline_page)
+
+        storyboard_page = QWidget()
+        storyboard_layout = QVBoxLayout(storyboard_page)
+        storyboard_layout.setContentsMargins(0, 0, 0, 0)
+        self.storyboard_list = _TimelineListWidget()
+        self.storyboard_list.setObjectName("E-TIMELINE-STORYBOARD")
+        self.storyboard_list.setAccessibleName("시각 클립 스토리보드")
+        self.storyboard_list.setFlow(QListView.Flow.LeftToRight)
+        self.storyboard_list.setWrapping(False)
+        self.storyboard_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.storyboard_list.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.storyboard_list.itemSelectionChanged.connect(self._select_storyboard_items)
+        self.storyboard_list.move_requested.connect(
+            lambda target: self.controller.move_selected_to_index(TrackKind.VISUAL, target)
+        )
+        self.storyboard_list.zoom_requested.connect(
+            lambda direction, x: self._zoom_timeline_at(
+                self.storyboard_list, direction, x
+            )
+        )
+        storyboard_layout.addWidget(self.storyboard_list, 1)
+        self.storyboard_summary = QLabel()
+        self.storyboard_summary.setObjectName("E-TIMELINE-STORYBOARD-SUMMARY")
+        self.storyboard_summary.setProperty("role", "caption")
+        storyboard_layout.addWidget(self.storyboard_summary)
+        self.timeline_views.addWidget(storyboard_page)
+        layout.addWidget(self.timeline_views, 1)
         return panel
 
     def _make_export_progress_panel(self) -> QWidget:
@@ -898,8 +997,8 @@ class MainWindow(QMainWindow):
             "remove_asset": self._action("보관함에서 제거", self._request_remove_asset),
             "export": self._action("동영상 저장…", self._open_export_settings, "Ctrl+E"),
             "exit": self._action("종료", self.close),
-            "undo": self._action("실행 취소", self.controller.undo, "Ctrl+Z"),
-            "redo": self._action("다시 실행", self.controller.redo, "Ctrl+Y"),
+            "undo": self._action("실행 취소", self._undo_contextual, "Ctrl+Z"),
+            "redo": self._action("다시 실행", self._redo_contextual, "Ctrl+Y"),
             "play_pause": self._action(
                 "재생/일시 정지",
                 self._toggle_preview_playback,
@@ -907,14 +1006,21 @@ class MainWindow(QMainWindow):
             ),
             "delete": self._action("선택 항목 삭제", self._delete_contextual, "Delete"),
             "split": self._action("재생 위치에서 분할", self.controller.split_selected_clip, "Ctrl+B"),
-            "duplicate": self._action("클립 복제 · 1.0", self.controller.duplicate_selected_clip, "Ctrl+D"),
+            "duplicate": self._action("클립 복제", self._duplicate_contextual, "Ctrl+D"),
             "move_back": self._action(
                 "클립 앞으로 이동",
-                lambda: self.controller.move_selected_visual(-1),
+                lambda: self._move_selected_keyboard(-1),
+                "Alt+Left",
             ),
             "move_forward": self._action(
                 "클립 뒤로 이동",
-                lambda: self.controller.move_selected_visual(1),
+                lambda: self._move_selected_keyboard(1),
+                "Alt+Right",
+            ),
+            "view_toggle": self._action(
+                "타임라인·스토리보드 전환",
+                self._toggle_timeline_view,
+                "Ctrl+Shift+V",
             ),
             "add_music": self._action(
                 "선택 오디오를 음악으로 추가",
@@ -1013,14 +1119,15 @@ class MainWindow(QMainWindow):
         view_menu = menu_bar.addMenu("보기")
         self._add_actions(view_menu, "library_toggle", "inspector_toggle")
         view_menu.addSeparator()
-        timeline_menu = view_menu.addMenu("스토리보드·타임라인 · 1.0")
+        timeline_menu = view_menu.addMenu("스토리보드·타임라인")
+        timeline_menu.addAction(self._actions["view_toggle"])
         timeline_menu.addAction(
             self._action("타임라인", lambda: self.controller.set_timeline_mode("타임라인"))
         )
         timeline_menu.addAction(
             self._action(
                 "스토리보드",
-                lambda: self.controller.set_timeline_mode("스토리보드 · 1.0"),
+                lambda: self.controller.set_timeline_mode("스토리보드"),
             )
         )
 
@@ -1162,7 +1269,7 @@ class MainWindow(QMainWindow):
         title_suffix = " *" if state.is_dirty else ""
         self.setWindowTitle(
             f"{state.project_name}{title_suffix} — Movie Maker Reproduction · "
-            "W-07 실제 MP4 출력"
+            "W-08 고급 타임라인"
         )
         self.preview_stack.setCurrentIndex(0 if not state.assets else 1)
         self._refresh_library()
@@ -1286,14 +1393,46 @@ class MainWindow(QMainWindow):
                 if clip.clip_id == state.selected_clip_id:
                     widget.setCurrentItem(item)
             del blocker
+        storyboard_blocker = QSignalBlocker(self.storyboard_list)
+        self.storyboard_list.clear()
+        for index, clip in enumerate(state.visual_clips, start=1):
+            asset = self.controller.asset_for_clip(clip)
+            item = QListWidgetItem(
+                self._clip_icon(clip, asset),
+                f"{index}. {clip.label}\n{format_time(clip.duration_ms)}",
+            )
+            item.setData(Qt.ItemDataRole.UserRole, clip.clip_id)
+            item.setToolTip(
+                f"스토리보드 순서 {index} · 시작 {format_time(clip.start_ms)}"
+            )
+            width = int(180 * state.timeline_zoom / 100)
+            item.setSizeHint(QSize(max(140, min(width, 360)), 94))
+            self.storyboard_list.addItem(item)
+            if clip.clip_id in state.selected_clip_ids:
+                item.setSelected(True)
+            if clip.clip_id == state.selected_clip_id:
+                self.storyboard_list.setCurrentItem(item)
+        if not state.visual_clips:
+            placeholder = QListWidgetItem("＋ 시각 미디어를 추가하면 카드가 표시됩니다")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.storyboard_list.addItem(placeholder)
+        del storyboard_blocker
+        self.storyboard_summary.setText(
+            f"음악 {len(state.music_clips)}개 · 내레이션 {len(state.narration_clips)}개 · "
+            f"텍스트 {len(state.text_clips)}개 · 재생 위치 {format_time(state.playhead_ms)}"
+        )
         total = state.total_duration_ms
         self.timeline_ruler.setRange(0, total)
+        self.timeline_ruler.setTickInterval(
+            max(1_000, round(max(total, 1_000) / (10 * state.timeline_zoom / 100)))
+        )
         self.timeline_ruler.setValue(state.playhead_ms)
         self.timeline_ruler.setEnabled(total > 0)
         self.timeline_time.setText(f"{format_time(state.playhead_ms)} / {format_time(total)}")
         mode_blocker = QSignalBlocker(self.timeline_mode_combo)
         self.timeline_mode_combo.setCurrentText(state.timeline_mode)
         del mode_blocker
+        self.timeline_views.setCurrentIndex(1 if state.timeline_mode == "스토리보드" else 0)
         zoom_blocker = QSignalBlocker(self.timeline_zoom)
         self.timeline_zoom.setValue(state.timeline_zoom)
         del zoom_blocker
@@ -1800,9 +1939,13 @@ class MainWindow(QMainWindow):
             single_clip and clip is not None,
             "복제할 클립 하나를 선택하세요",
         )
+        selected_clips = self.controller.selected_clips
+        same_track = bool(selected_clips) and len({item.track for item in selected_clips}) == 1
+        for name in ("move_back", "move_forward"):
+            self._set_action(name, same_track, "같은 트랙의 클립을 선택하세요")
         is_visual = single_clip and clip is not None and clip.track is TrackKind.VISUAL
-        for name in ("move_back", "move_forward", "fit", "fill", "rotate_left", "rotate_right"):
-            self._set_action(name, is_visual, "영상 또는 사진 클립을 선택하세요")
+        for name in ("fit", "fill", "rotate_left", "rotate_right"):
+            self._set_action(name, is_visual, "영상 또는 사진 클립 하나를 선택하세요")
         can_transition = False
         if is_visual and clip is not None:
             can_transition = state.visual_clips.index(clip) < len(state.visual_clips) - 1
@@ -1918,6 +2061,48 @@ class MainWindow(QMainWindow):
             del blocker
         self.controller.select_clips(selected_ids, active_id)
 
+    def _select_storyboard_items(self) -> None:
+        self._showing_transition = False
+        selected_ids = [
+            clip_id
+            for item in self.storyboard_list.selectedItems()
+            if isinstance((clip_id := item.data(Qt.ItemDataRole.UserRole)), str)
+        ]
+        current = self.storyboard_list.currentItem()
+        active_value = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
+        active_id = active_value if isinstance(active_value, str) else None
+        self.controller.select_clips(selected_ids, active_id)
+
+    def _zoom_timeline_at(
+        self,
+        widget: _TimelineListWidget,
+        direction: int,
+        pointer_x: int,
+    ) -> None:
+        scrollbar = widget.horizontalScrollBar()
+        before_extent = max(scrollbar.maximum() + scrollbar.pageStep(), 1)
+        anchor = (scrollbar.value() + pointer_x) / before_extent
+        requested = self.controller.state.timeline_zoom + direction * 25
+        if not self.controller.set_timeline_zoom(requested):
+            return
+        after_extent = max(scrollbar.maximum() + scrollbar.pageStep(), 1)
+        target = round(anchor * after_extent - pointer_x)
+        scrollbar.setValue(min(scrollbar.maximum(), max(scrollbar.minimum(), target)))
+
+    def _toggle_timeline_view(self) -> None:
+        target = (
+            "스토리보드"
+            if self.controller.state.timeline_mode == "타임라인"
+            else "타임라인"
+        )
+        self.controller.set_timeline_mode(target)
+
+    def _move_selected_keyboard(self, direction: int) -> bool:
+        selected = self.controller.selected_clips
+        if selected and selected[0].track is not TrackKind.VISUAL:
+            return self.controller.move_selected_absolute(direction * 1_000)
+        return self.controller.move_selected_visual(direction)
+
     def _change_timeline_mode(self, text: str) -> None:
         if text:
             self.controller.set_timeline_mode(text)
@@ -2008,6 +2193,8 @@ class MainWindow(QMainWindow):
 
     def _delete_contextual(self) -> None:
         focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit)):
+            return
         if focused is self.library_list or (
             focused is not None and self.library_list.isAncestorOf(focused)
         ):
@@ -2016,6 +2203,29 @@ class MainWindow(QMainWindow):
             self.controller.delete_selected_clip()
         elif self.controller.selected_asset is not None:
             self._request_remove_asset()
+
+    @staticmethod
+    def _focused_text_editor() -> QLineEdit | QTextEdit | None:
+        focused = QApplication.focusWidget()
+        return focused if isinstance(focused, (QLineEdit, QTextEdit)) else None
+
+    def _undo_contextual(self) -> None:
+        editor = self._focused_text_editor()
+        if editor is not None:
+            editor.undo()
+            return
+        self.controller.undo()
+
+    def _redo_contextual(self) -> None:
+        editor = self._focused_text_editor()
+        if editor is not None:
+            editor.redo()
+            return
+        self.controller.redo()
+
+    def _duplicate_contextual(self) -> None:
+        if self._focused_text_editor() is None:
+            self.controller.duplicate_selected_clip()
 
     def _guard_unsaved(self, continuation: Callable[[], None]) -> None:
         if not self.controller.state.is_dirty:
