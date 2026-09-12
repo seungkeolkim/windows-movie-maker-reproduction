@@ -1,5 +1,9 @@
 # W-07 FFmpeg MP4 출력
 
+- 상태: 완료
+- 구현 계약: [DESIGN-0009](../docs/design/design-0009-mp4-export-contract.md)
+- 완료일: 2026-09-12
+
 ## 작업 목표
 
 고정 타이머와 가짜 결과 경로로 동작하는 출력 목업을 실제 FFmpeg 렌더링 작업으로 교체한다.

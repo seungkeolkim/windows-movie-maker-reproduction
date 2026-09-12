@@ -188,7 +188,7 @@ def test_text_transition_and_narration_mock_commands_update_fixed_tracks() -> No
     assert controller.state.narration_clips[-1].label == "목업 내레이션"
 
 
-def test_export_can_complete_cancel_and_fail_without_creating_a_file() -> None:
+def test_export_presentation_state_tracks_real_worker_updates() -> None:
     controller = MockController()
     controller.load_sample_project()
     controller.configure_export(
@@ -199,24 +199,25 @@ def test_export_can_complete_cancel_and_fail_without_creating_a_file() -> None:
     )
 
     assert controller.start_export()
-    for _ in range(20):
-        controller.advance_export()
+    controller.update_export_progress(45, elapsed_ms=2_000, eta_ms=3_000)
+    controller.update_export_progress(99, elapsed_ms=4_000, eta_ms=100, verifying=True)
+    controller.complete_export(r"C:\Videos\result.mp4", elapsed_ms=4_500)
     assert controller.state.export_state is ExportState.COMPLETE
     assert controller.state.export_progress == 100
+    assert controller.state.export_result_path == r"C:\Videos\result.mp4"
 
     controller.close_export_result()
     assert controller.start_export()
     assert controller.cancel_export()
-    controller.advance_export()
+    controller.complete_export_cancellation()
     assert controller.state.export_state is ExportState.CANCELLED
 
     controller.close_export_result()
-    controller.reserve_export_failure("디스크 공간이 부족합니다")
     assert controller.start_export()
-    for _ in range(5):
-        controller.advance_export()
+    controller.fail_export("디스크 공간이 부족합니다", "ENOSPC")
     assert controller.state.export_state is ExportState.FAILED
     assert controller.state.export_error == "디스크 공간이 부족합니다"
+    assert controller.state.export_error_detail == "ENOSPC"
 
 
 def test_real_save_marks_current_result_clean_without_serialising_history(

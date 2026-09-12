@@ -89,12 +89,12 @@ ffmpeg_version="${ffmpeg_version_output%%$'\n'*}"
 ffprobe_version_output="$("$ffprobe_path" -hide_banner -version 2>&1)"
 ffprobe_version="${ffprobe_version_output%%$'\n'*}"
 encoders="$("$ffmpeg_path" -hide_banner -encoders 2>&1)"
-grep -Eq '[[:space:]](libx264|libopenh264)[[:space:]]' <<<"$encoders" || fail "A software H.264 encoder is required. Install an FFmpeg build containing libx264 or libopenh264."
+grep -Eq '[[:space:]]libx264[[:space:]]' <<<"$encoders" || fail "The libx264 H.264 encoder is required. Install an FFmpeg build containing libx264."
 grep -Eq '[[:space:]]aac[[:space:]]' <<<"$encoders" || fail "An FFmpeg build containing the AAC encoder is required."
 
 filters="$("$ffmpeg_path" -hide_banner -filters 2>&1)"
 required_filters=(
-    trim atrim setpts asetpts concat scale crop pad fps aresample aformat atempo adelay
+    trim atrim setpts asetpts concat scale crop pad fps format setsar aresample aformat atempo adelay
     volume afade amix alimiter apad anull anullsrc xfade acrossfade drawtext
 )
 missing_filters=()

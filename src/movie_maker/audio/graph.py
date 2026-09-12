@@ -267,8 +267,18 @@ def _delay_samples(value: ProjectTime, sample_rate: int) -> int:
     return audio_frames_for_time(value, sample_rate)
 
 
-def ffmpeg_audio_filter(graph: AudioGraph) -> str:
+def ffmpeg_audio_filter(
+    graph: AudioGraph,
+    *,
+    input_offset: int = 0,
+    output_label: str = "aout",
+) -> str:
     """Build the shared normalization, placement, mix, and limiting graph."""
+
+    if type(input_offset) is not int or input_offset < 0:
+        raise ValueError("Audio input offset must be a non-negative integer.")
+    if not output_label or not output_label.isalnum():
+        raise ValueError("Audio output label must be a non-empty alphanumeric value.")
 
     duration_text = format_audio_time(graph.duration)
     filters: list[str] = []
@@ -278,7 +288,7 @@ def ffmpeg_audio_filter(graph: AudioGraph) -> str:
         labels.append(label)
         chain = [
             (
-                f"[{index}:{source.stream_index}]atrim="
+                f"[{index + input_offset}:{source.stream_index}]atrim="
                 f"start={format_audio_time(source.source_in)}:"
                 f"end={format_audio_time(source.source_out)}"
             ),
@@ -315,12 +325,12 @@ def ffmpeg_audio_filter(graph: AudioGraph) -> str:
         filters.append(
             f"{mix},alimiter=limit=0.95:level=false:latency=true,"
             f"apad=whole_dur={duration_text},atrim=duration={duration_text},"
-            "asetpts=PTS-STARTPTS[aout]"
+            f"asetpts=PTS-STARTPTS[{output_label}]"
         )
     else:
         filters.append(
             f"anullsrc=r={graph.sample_rate}:cl=stereo,"
-            f"atrim=duration={duration_text},asetpts=PTS-STARTPTS[aout]"
+            f"atrim=duration={duration_text},asetpts=PTS-STARTPTS[{output_label}]"
         )
     return ";".join(filters)
 

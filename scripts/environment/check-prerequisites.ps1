@@ -108,10 +108,10 @@ $encoders = $encoderOutput | Out-String
 if ($encoderExitCode -ne 0) {
     throw "Unable to inspect the FFmpeg encoder list."
 }
-if ($encoders -notmatch "(?m)\s(libx264|h264_mf)\s") {
-    throw "A software H.264 encoder is required. Install an FFmpeg build containing libx264 or h264_mf."
+if ($encoders -notmatch "(?m)\slibx264\s") {
+    throw "The libx264 H.264 encoder is required. Install an FFmpeg build containing libx264."
 }
-if ($encoders -notmatch "(?m)\s(aac|aac_mf)\s") {
+if ($encoders -notmatch "(?m)\saac\s") {
     throw "An FFmpeg build containing an AAC encoder is required."
 }
 
@@ -131,6 +131,8 @@ $requiredFilters = @(
     "crop",
     "pad",
     "fps",
+    "format",
+    "setsar",
     "aresample",
     "aformat",
     "atempo",

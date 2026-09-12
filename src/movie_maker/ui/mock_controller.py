@@ -1729,7 +1729,10 @@ class MockController(QObject):
         preset: str,
         framerate: str,
         quality: str,
-    ) -> None:
+    ) -> bool:
+        if self.state.export_state in {ExportState.RUNNING, ExportState.CANCELLING}:
+            self._set_status("이미 동영상을 저장하고 있습니다")
+            return False
         self.state.export_path = path
         self.state.export_preset = preset
         self.state.export_framerate = framerate
@@ -1737,12 +1740,20 @@ class MockController(QObject):
         self.state.export_state = ExportState.CONFIG
         self.export_changed.emit()
         self.state_changed.emit()
+        return True
 
     def open_export_configuration(self) -> bool:
-        """Enter the export configuration state when the project can be exported."""
+        """Enter export configuration when all visual sources are available."""
 
         if not self.state.visual_clips:
             self._set_status("동영상 저장에는 하나 이상의 영상 또는 사진이 필요합니다")
+            return False
+        if any(
+            (asset := self.state.assets.get(clip.asset_id or "")) is None
+            or asset.status is not AssetStatus.READY
+            for clip in (*self.state.visual_clips, *self.state.music_clips)
+        ):
+            self._set_status("누락되거나 읽을 수 없는 출력 미디어를 먼저 다시 연결하세요")
             return False
         self.state.export_state = ExportState.CONFIG
         self.export_changed.emit()
@@ -1753,29 +1764,68 @@ class MockController(QObject):
         if not self.state.visual_clips:
             self._set_status("동영상 저장에는 하나 이상의 영상 또는 사진이 필요합니다")
             return False
+        if self.state.export_state in {ExportState.RUNNING, ExportState.CANCELLING}:
+            self._set_status("이미 동영상을 저장하고 있습니다")
+            return False
         self.state.is_playing = False
         self.state.export_state = ExportState.RUNNING
         self.state.export_progress = 0
         self.state.export_error = None
-        self.state.status_message = "동영상 저장 준비 중 · 목업"
+        self.state.export_error_detail = None
+        self.state.export_elapsed_ms = 0
+        self.state.export_eta_ms = None
+        self.state.export_result_path = None
+        self.state.export_stage = "encoding"
+        self.state.status_message = "동영상 저장을 시작했습니다"
         self.export_changed.emit()
         self._publish()
         return True
 
-    def advance_export(self) -> None:
-        if self.state.export_state is ExportState.CANCELLING:
-            self.state.export_state = ExportState.CANCELLED
-            self.state.status_message = "출력을 취소했습니다 · 불완전 파일 없음 · 목업"
-        elif self.state.export_state is ExportState.RUNNING:
-            self.state.export_progress = min(100, self.state.export_progress + 5)
-            if self.state.pending_export_error and self.state.export_progress >= 25:
-                self.state.export_state = ExportState.FAILED
-                self.state.export_error = self.state.pending_export_error
-                self.state.pending_export_error = None
-                self.state.status_message = "동영상 저장에 실패했습니다 · 해결 행동을 확인하세요"
-            elif self.state.export_progress >= 100:
-                self.state.export_state = ExportState.COMPLETE
-                self.state.status_message = "동영상 저장 완료 · 목업 파일"
+    def update_export_progress(
+        self,
+        percent: int,
+        *,
+        elapsed_ms: int,
+        eta_ms: int | None,
+        verifying: bool = False,
+    ) -> None:
+        if self.state.export_state is not ExportState.RUNNING:
+            return
+        self.state.export_progress = max(self.state.export_progress, min(percent, 99))
+        self.state.export_elapsed_ms = max(0, elapsed_ms)
+        self.state.export_eta_ms = max(0, eta_ms) if eta_ms is not None else None
+        self.state.export_stage = "verifying" if verifying else "encoding"
+        self.export_changed.emit()
+        self._publish()
+
+    def complete_export(self, path: str, *, elapsed_ms: int) -> None:
+        self.state.export_state = ExportState.COMPLETE
+        self.state.export_progress = 100
+        self.state.export_elapsed_ms = max(0, elapsed_ms)
+        self.state.export_eta_ms = 0
+        self.state.export_result_path = path
+        self.state.export_stage = "complete"
+        self.state.export_error = None
+        self.state.export_error_detail = None
+        self.state.status_message = "동영상 저장을 완료했습니다"
+        self.export_changed.emit()
+        self._publish()
+
+    def fail_export(self, message: str, detail: str | None = None) -> None:
+        self.state.export_state = ExportState.FAILED
+        self.state.export_error = message
+        self.state.export_error_detail = detail
+        self.state.export_eta_ms = None
+        self.state.export_stage = "failed"
+        self.state.status_message = "동영상 저장에 실패했습니다 · 해결 행동을 확인하세요"
+        self.export_changed.emit()
+        self._publish()
+
+    def complete_export_cancellation(self) -> None:
+        self.state.export_state = ExportState.CANCELLED
+        self.state.export_eta_ms = None
+        self.state.export_stage = "cancelled"
+        self.state.status_message = "출력을 취소했습니다 · 불완전 파일을 정리했습니다"
         self.export_changed.emit()
         self._publish()
 
@@ -1783,20 +1833,20 @@ class MockController(QObject):
         if self.state.export_state is not ExportState.RUNNING:
             return False
         self.state.export_state = ExportState.CANCELLING
-        self.state.status_message = "출력 취소 요청을 정리하고 있습니다 · 목업"
+        self.state.status_message = "출력 프로세스와 임시 파일을 정리하고 있습니다"
         self.export_changed.emit()
         self._publish()
         return True
-
-    def reserve_export_failure(self, reason: str) -> None:
-        self.state.pending_export_error = reason
-        self._set_status(f"다음 출력 실패 예약: {reason} · 목업 상태")
-        self.state_changed.emit()
 
     def close_export_result(self) -> None:
         self.state.export_state = ExportState.CLOSED
         self.state.export_progress = 0
         self.state.export_error = None
+        self.state.export_error_detail = None
+        self.state.export_elapsed_ms = 0
+        self.state.export_eta_ms = None
+        self.state.export_result_path = None
+        self.state.export_stage = "encoding"
         self.export_changed.emit()
         self.state_changed.emit()
 

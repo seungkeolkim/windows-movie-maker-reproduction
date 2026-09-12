@@ -25,16 +25,24 @@ from PySide6.QtWidgets import (
 
 from movie_maker.ui.mock_model import MockProjectState
 
+ExportPathSelector = Callable[[str], str | None]
+
 
 class ExportSettingsDialog(QDialog):
-    """S-EXPORT-SETTINGS with deterministic mock destinations and presets."""
+    """S-EXPORT-SETTINGS for the real fixed-policy MP4 renderer."""
 
     export_requested = Signal(str, str, str, str)
 
-    def __init__(self, state: MockProjectState, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        state: MockProjectState,
+        parent: QWidget | None = None,
+        *,
+        path_selector: ExportPathSelector | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("S-EXPORT-SETTINGS")
-        self.setWindowTitle("동영상 저장 · 목업")
+        self.setWindowTitle("동영상 저장")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setMinimumWidth(560)
 
@@ -43,7 +51,7 @@ class ExportSettingsDialog(QDialog):
         heading.setObjectName("dialogHeading")
         layout.addWidget(heading)
         explanation = QLabel(
-            "실제 파일을 만들지 않고 출력 설정, 진행, 취소와 실패 흐름을 검증합니다."
+            "편집 결과를 H.264 영상과 AAC 오디오가 포함된 실제 MP4 파일로 저장합니다."
         )
         explanation.setWordWrap(True)
         explanation.setObjectName("secondaryText")
@@ -55,8 +63,8 @@ class ExportSettingsDialog(QDialog):
         path_row = QHBoxLayout()
         path_row.addWidget(self.path_edit)
         browse_button = QPushButton("위치 선택…")
-        browse_button.setToolTip("목업 고정 경로를 선택합니다")
-        browse_button.clicked.connect(self._choose_mock_path)
+        browse_button.setToolTip("MP4 파일을 저장할 위치를 선택합니다")
+        browse_button.clicked.connect(self._choose_path)
         path_row.addWidget(browse_button)
         form.addRow("파일", path_row)
 
@@ -69,17 +77,15 @@ class ExportSettingsDialog(QDialog):
 
         self.framerate_combo = QComboBox()
         self.framerate_combo.setObjectName("E-EXPORT-FRAMERATE")
-        self.framerate_combo.addItems(["원본", "24 fps", "25 fps", "30 fps", "50 fps", "60 fps"])
-        self.framerate_combo.setCurrentText(state.export_framerate)
-        self.framerate_combo.currentTextChanged.connect(self._refresh_summary)
-        form.addRow("프레임률 · 1.0", self.framerate_combo)
+        self.framerate_combo.addItem("30 fps")
+        self.framerate_combo.setEnabled(False)
+        form.addRow("프레임률", self.framerate_combo)
 
         self.quality_combo = QComboBox()
         self.quality_combo.setObjectName("E-EXPORT-QUALITY")
-        self.quality_combo.addItems(["작게", "권장", "높음"])
-        self.quality_combo.setCurrentText(state.export_quality)
-        self.quality_combo.currentTextChanged.connect(self._refresh_summary)
-        form.addRow("품질 · 1.0", self.quality_combo)
+        self.quality_combo.addItem("권장")
+        self.quality_combo.setEnabled(False)
+        form.addRow("품질", self.quality_combo)
         layout.addLayout(form)
 
         self.original_summary = QLabel()
@@ -110,10 +116,15 @@ class ExportSettingsDialog(QDialog):
         layout.addWidget(buttons)
 
         self._state = state
+        self._path_selector = path_selector
         self._refresh_summary()
 
-    def _choose_mock_path(self) -> None:
-        self.path_edit.setText(r"C:\Videos\제주 여행 목업.mp4")
+    def _choose_path(self) -> None:
+        if self._path_selector is None:
+            return
+        selected = self._path_selector(self.path_edit.text())
+        if selected is not None:
+            self.path_edit.setText(selected)
 
     def _refresh_summary(self) -> None:
         preset = self.preset_combo.currentText()
@@ -136,12 +147,10 @@ class ExportSettingsDialog(QDialog):
                 "맞추고 남는 영역에 중립 배경을 사용합니다."
             )
         self.original_summary.setText(reference)
-        quality = self.quality_combo.currentText()
-        estimated = {"작게": "약 12 MB", "권장": "약 24 MB", "높음": "약 38 MB"}[quality]
         seconds = self._state.total_duration_ms / 1_000
         self.summary.setText(
             f"MP4 · H.264/AAC\n{size} · {self.framerate_combo.currentText()} · "
-            f"{seconds:.1f}초 · 예상 {estimated} · 목업 값"
+            f"{seconds:.1f}초 · 예상 크기는 원본 내용에 따라 달라집니다"
         )
 
     def _request_export(self) -> None:

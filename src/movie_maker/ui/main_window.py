@@ -5,12 +5,14 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable, Sequence
 from importlib.metadata import version
+from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer, qVersion
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer, QUrl, qVersion
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QColor,
+    QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
     QIcon,
@@ -60,6 +62,19 @@ from movie_maker.audio import (
     audio_frames_for_time,
     build_audio_graph,
 )
+from movie_maker.exporting import (
+    ExportBusyError,
+    ExportCancelled,
+    ExportCoordinator,
+    ExportFailed,
+    ExportPlan,
+    ExportPlanError,
+    ExportPreset,
+    ExportProgress,
+    ExportProgressStage,
+    ExportSucceeded,
+    build_export_plan,
+)
 from movie_maker.media import AUDIO_EXTENSIONS, PHOTO_EXTENSIONS, VIDEO_EXTENSIONS
 from movie_maker.preview import (
     DecodedFrame,
@@ -79,6 +94,7 @@ from movie_maker.ui.dialogs import (
     RecoveryDialog,
     RuntimeDialog,
 )
+from movie_maker.ui.exporting import ExportBridge
 from movie_maker.ui.mock_controller import MockController, format_time
 from movie_maker.ui.mock_model import (
     AssetStatus,
@@ -93,6 +109,8 @@ from movie_maker.ui.preview import PreviewBridge
 MediaFileSelector = Callable[[], Sequence[str]]
 ProjectOpenSelector = Callable[[], str | None]
 ProjectSaveSelector = Callable[[str | None], str | None]
+ExportPathSelector = Callable[[str], str | None]
+ExportResultOpener = Callable[[str], bool]
 
 AUDIO_PREVIEW_CHUNK = ProjectTime.from_seconds(30)
 
@@ -125,6 +143,9 @@ class MainWindow(QMainWindow):
         preview_coordinator: PreviewDecodeCoordinator | None = None,
         audio_coordinator: AudioDecodeCoordinator | None = None,
         audio_output: AudioOutput | None = None,
+        export_coordinator: ExportCoordinator | None = None,
+        export_path_selector: ExportPathSelector | None = None,
+        export_result_opener: ExportResultOpener | None = None,
     ) -> None:
         super().__init__()
         self.setObjectName("S-EDITOR")
@@ -135,6 +156,8 @@ class MainWindow(QMainWindow):
         self._media_file_selector = media_file_selector or self._choose_media_files
         self._project_open_selector = project_open_selector or self._choose_project_to_open
         self._project_save_selector = project_save_selector or self._choose_project_to_save
+        self._export_path_selector = export_path_selector or self._choose_export_path
+        self._export_result_opener = export_result_opener or self._open_export_result_folder
         self._allow_close = False
         self._showing_transition = False
         self._responsive_hidden_inspector = False
@@ -154,13 +177,13 @@ class MainWindow(QMainWindow):
         self._audio_build_failure_project: Project | None = None
         if isinstance(self._audio_output, QtAudioOutput):
             self._audio_output.output_failed.connect(self._accept_audio_output_failure)
+        self._export_bridge = ExportBridge(export_coordinator, self)
+        self._pending_after_export: Callable[[], None] | None = None
+        self._close_after_export = False
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(16)
         self._preview_timer.timeout.connect(self.controller.advance_playback)
-        self._export_timer = QTimer(self)
-        self._export_timer.setInterval(200)
-        self._export_timer.timeout.connect(self.controller.advance_export)
 
         self._build_central_workspace()
         self._build_library_dock()
@@ -178,6 +201,8 @@ class MainWindow(QMainWindow):
         self._preview_bridge.frame_failed.connect(self._accept_preview_failure)
         self._audio_bridge.audio_ready.connect(self._accept_audio)
         self._audio_bridge.audio_failed.connect(self._accept_audio_failure)
+        self._export_bridge.progress_changed.connect(self._accept_export_progress)
+        self._export_bridge.export_finished.connect(self._accept_export_result)
         self.refresh()
 
     # ------------------------------------------------------------------
@@ -220,8 +245,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(heading)
         description = QLabel(
             "로컬 영상, 사진과 오디오를 가져와 미디어 보관함을 만들 수 있습니다.\n"
-            "가져오기, 저장, 타임라인 편집과 영상·사진·오디오 미리 보기는 실제 기능입니다.\n"
-            "동영상 출력은 다음 작업입니다."
+            "가져오기, 편집, 영상·오디오 미리 보기와 MP4 동영상 저장은 실제 기능입니다.\n"
+            "원본 유지, 720p 또는 1080p 크기로 완성 파일을 만들 수 있습니다."
         )
         description.setObjectName("secondaryText")
         description.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -932,18 +957,6 @@ class MainWindow(QMainWindow):
                 "가져오기 부분 실패 표시 · 목업",
                 self.controller.inject_import_failure,
             ),
-            "fail_write": self._action(
-                "다음 출력: 위치에 쓸 수 없음 · 목업",
-                lambda: self.controller.reserve_export_failure("출력 위치에 쓸 수 없습니다"),
-            ),
-            "fail_ffmpeg": self._action(
-                "다음 출력: FFmpeg 없음 · 목업",
-                lambda: self.controller.reserve_export_failure("FFmpeg를 찾을 수 없습니다"),
-            ),
-            "fail_space": self._action(
-                "다음 출력: 디스크 공간 부족 · 목업",
-                lambda: self.controller.reserve_export_failure("디스크 공간이 부족합니다"),
-            ),
             "recovery": self._action("자동 저장 복구 열기 · 목업", self._open_recovery),
             "version_error": self._action(
                 "새 버전 프로젝트 오류 · 목업",
@@ -1017,9 +1030,6 @@ class MainWindow(QMainWindow):
         mock_menu = menu_bar.addMenu("목업 상태")
         mock_menu.setObjectName("M-MOCK-STATE-MENU")
         self._add_actions(mock_menu, "sample", "empty", "missing", "import_failure")
-        mock_menu.addSeparator()
-        failure_menu = mock_menu.addMenu("다음 출력 실패 예약")
-        self._add_actions(failure_menu, "fail_write", "fail_ffmpeg", "fail_space")
         mock_menu.addSeparator()
         self._add_actions(mock_menu, "recovery", "version_error", "onboarding", "runtime")
 
@@ -1152,7 +1162,7 @@ class MainWindow(QMainWindow):
         title_suffix = " *" if state.is_dirty else ""
         self.setWindowTitle(
             f"{state.project_name}{title_suffix} — Movie Maker Reproduction · "
-            "W-06 실제 오디오 미리 듣기 · 출력 후속"
+            "W-07 실제 MP4 출력"
         )
         self.preview_stack.setCurrentIndex(0 if not state.assets else 1)
         self._refresh_library()
@@ -1163,14 +1173,15 @@ class MainWindow(QMainWindow):
         self._refresh_actions()
         self._refresh_export_panel()
         proxy_count = sum(asset.proxy_enabled for asset in state.assets.values())
-        background_summary = (
-            f"목업 프록시 {proxy_count}개 준비됨"
-            if proxy_count
-            else "백그라운드 작업 없음"
-        )
+        if state.export_state in {ExportState.RUNNING, ExportState.CANCELLING}:
+            background_summary = f"동영상 저장 {state.export_progress}%"
+        elif proxy_count:
+            background_summary = f"목업 프록시 {proxy_count}개 준비됨"
+        else:
+            background_summary = "백그라운드 작업 없음"
         self.status_summary.setText(
             f"길이 {format_time(state.total_duration_ms)} · "
-            f"{background_summary} · 미디어 분석·편집·영상·오디오 미리 보기 실제"
+            f"{background_summary} · 미디어 분석·편집·미리 보기·MP4 출력 실제"
         )
         if state.is_playing and not self._preview_timer.isActive():
             self._preview_timer.start()
@@ -1733,25 +1744,37 @@ class MainWindow(QMainWindow):
         state = self.controller.state
         clip = self.controller.selected_clip
         asset = self.controller.selected_asset
-        locked = state.export_state in {ExportState.RUNNING, ExportState.CANCELLING}
-        self._set_action("save", not locked, "출력 중에는 프로젝트를 저장할 수 없습니다")
-        self._set_action("save_as", not locked, "출력 중에는 프로젝트를 저장할 수 없습니다")
-        self._set_action("import", not locked, "출력 중에는 미디어를 가져올 수 없습니다")
+        export_active = state.export_state in {ExportState.RUNNING, ExportState.CANCELLING}
+        export_clips = (*state.visual_clips, *state.music_clips)
+        export_sources_ready = all(
+            (source := state.assets.get(item.asset_id or "")) is not None
+            and source.status is AssetStatus.READY
+            for item in export_clips
+        )
+        self._set_action("save", True, "")
+        self._set_action("save_as", True, "")
+        self._set_action("import", True, "")
         self._set_action(
             "remove_asset",
-            asset is not None and not locked,
+            asset is not None,
             "보관함에서 제거할 미디어를 선택하세요",
         )
+        if export_active:
+            export_reason = "이미 동영상을 저장하고 있습니다"
+        elif not state.visual_clips:
+            export_reason = "동영상 저장에는 영상 또는 사진 클립이 필요합니다"
+        else:
+            export_reason = "누락되거나 읽을 수 없는 출력 미디어를 먼저 다시 연결하세요"
         self._set_action(
             "export",
-            bool(state.visual_clips) and not locked,
-            "동영상 저장에는 영상 또는 사진 클립이 필요합니다",
+            bool(state.visual_clips) and export_sources_ready and not export_active,
+            export_reason,
         )
-        self._set_action("undo", self.controller.can_undo and not locked, "되돌릴 편집이 없습니다")
-        self._set_action("redo", self.controller.can_redo and not locked, "다시 실행할 편집이 없습니다")
+        self._set_action("undo", self.controller.can_undo, "되돌릴 편집이 없습니다")
+        self._set_action("redo", self.controller.can_redo, "다시 실행할 편집이 없습니다")
         self._set_action(
             "play_pause",
-            bool(state.visual_clips) and not locked,
+            bool(state.visual_clips),
             "재생하려면 시각 클립이 필요합니다",
         )
         self._actions["undo"].setText(
@@ -1765,7 +1788,7 @@ class MainWindow(QMainWindow):
             else "다시 실행"
         )
         single_clip = len(state.selected_clip_ids) == 1
-        can_split = single_clip and clip is not None and self._can_split_clip(clip) and not locked
+        can_split = single_clip and clip is not None and self._can_split_clip(clip)
         self._set_action(
             "split",
             can_split,
@@ -1774,12 +1797,10 @@ class MainWindow(QMainWindow):
         self._set_action("delete", clip is not None or asset is not None, "삭제할 항목을 선택하세요")
         self._set_action(
             "duplicate",
-            single_clip and clip is not None and not locked,
+            single_clip and clip is not None,
             "복제할 클립 하나를 선택하세요",
         )
-        is_visual = (
-            single_clip and clip is not None and clip.track is TrackKind.VISUAL and not locked
-        )
+        is_visual = single_clip and clip is not None and clip.track is TrackKind.VISUAL
         for name in ("move_back", "move_forward", "fit", "fill", "rotate_left", "rotate_right"):
             self._set_action(name, is_visual, "영상 또는 사진 클립을 선택하세요")
         can_transition = False
@@ -1790,24 +1811,24 @@ class MainWindow(QMainWindow):
             can_transition,
             "다음 시각 클립이 있는 앞쪽 클립을 선택하세요",
         )
-        is_audio_asset = asset is not None and asset.kind is MediaKind.AUDIO and not locked
+        is_audio_asset = asset is not None and asset.kind is MediaKind.AUDIO
         self._set_action("add_music", is_audio_asset, "보관함에서 오디오를 선택하세요")
         self._set_action("add_narration", is_audio_asset, "보관함에서 오디오를 선택하세요")
         for name in ("add_title", "add_caption", "add_credits"):
-            self._set_action(name, bool(state.visual_clips) and not locked, "시각 클립이 필요합니다")
-        ready_asset = asset is not None and asset.status is AssetStatus.READY and not locked
+            self._set_action(name, bool(state.visual_clips), "시각 클립이 필요합니다")
+        ready_asset = asset is not None and asset.status is AssetStatus.READY
         self.library_add_button.setEnabled(ready_asset)
         self.library_add_button.setToolTip(
             "선택 미디어를 용도에 맞는 트랙에 추가합니다"
             if ready_asset
             else "정상 상태의 미디어를 먼저 선택하세요"
         )
-        self.library_remove_button.setEnabled(asset is not None and not locked)
+        self.library_remove_button.setEnabled(asset is not None)
         self.library_relink_button.setVisible(
             asset is not None and asset.status is not AssetStatus.READY
         )
-        self.inspector_reset.setEnabled(single_clip and not locked)
-        self.play_button.setEnabled(bool(state.visual_clips) and not locked)
+        self.inspector_reset.setEnabled(single_clip)
+        self.play_button.setEnabled(bool(state.visual_clips))
 
     def _set_action(self, name: str, enabled: bool, disabled_reason: str) -> None:
         action = self._actions[name]
@@ -1830,32 +1851,40 @@ class MainWindow(QMainWindow):
         show = export_state not in {ExportState.CLOSED, ExportState.CONFIG}
         self.export_panel.setVisible(show)
         self.export_progress.setValue(state.export_progress)
-        self.export_progress.setFormat(f"{state.export_progress}% · 목업")
+        self.export_progress.setFormat(f"{state.export_progress}%")
         self.export_cancel_button.setVisible(export_state is ExportState.RUNNING)
         self.export_cancel_button.setEnabled(export_state is ExportState.RUNNING)
         self.export_result_button.setVisible(
             export_state in {ExportState.CANCELLED, ExportState.COMPLETE, ExportState.FAILED}
         )
         if export_state is ExportState.RUNNING:
-            self.export_stage.setText("동영상 저장 중 · 장면 합성 · 목업")
-            if not self._export_timer.isActive():
-                self._export_timer.start()
+            elapsed = format_time(state.export_elapsed_ms)
+            remaining = (
+                format_time(state.export_eta_ms)
+                if state.export_eta_ms is not None
+                else "계산 중"
+            )
+            stage = "완성 파일 검증 중" if state.export_stage == "verifying" else "장면 합성 중"
+            self.export_stage.setText(
+                f"동영상 저장 중 · {stage}\n경과 {elapsed} · 예상 남은 시간 {remaining}"
+            )
         elif export_state is ExportState.CANCELLING:
-            self.export_stage.setText("출력을 취소하고 임시 결과를 정리하는 중 · 목업")
+            self.export_stage.setText("출력을 취소하고 FFmpeg와 임시 파일을 정리하는 중")
+            self.export_cancel_button.setVisible(True)
+            self.export_cancel_button.setEnabled(False)
         elif export_state is ExportState.CANCELLED:
-            self.export_stage.setText("출력 취소됨 · 불완전 파일을 만들지 않았습니다")
+            self.export_stage.setText("출력 취소됨 · 불완전 파일을 정리했습니다")
             self.export_result_button.setText("닫기")
-            self._export_timer.stop()
         elif export_state is ExportState.COMPLETE:
-            self.export_stage.setText(f"완료 · {state.export_path} · 목업 파일")
-            self.export_result_button.setText("파일 위치 열기 · 목업")
-            self._export_timer.stop()
+            self.export_stage.setText(
+                f"동영상 저장 완료 · {state.export_result_path or state.export_path}"
+            )
+            self.export_result_button.setText("파일 위치 열기")
         elif export_state is ExportState.FAILED:
             self.export_stage.setText(
                 f"출력 실패 · {state.export_error}\n설정을 확인하고 다시 시도하세요"
             )
             self.export_result_button.setText("설정으로 돌아가기")
-            self._export_timer.stop()
 
     # ------------------------------------------------------------------
     # User intent adapters
@@ -2014,10 +2043,43 @@ class MainWindow(QMainWindow):
         self._show_dialog(dialog)
 
     def _request_new_project(self) -> None:
-        self._guard_unsaved(self.controller.new_project)
+        self._request_project_switch(self.controller.new_project)
 
     def _request_open_project(self) -> None:
-        self._guard_unsaved(self._open_selected_project)
+        self._request_project_switch(self._open_selected_project)
+
+    def _request_project_switch(self, continuation: Callable[[], None]) -> None:
+        if not self._export_bridge.active:
+            self._guard_unsaved(continuation)
+            return
+        dialog = DecisionDialog(
+            title="동영상 저장 중 프로젝트 전환",
+            heading="진행 중인 출력을 취소하고 프로젝트를 전환할까요?",
+            body=(
+                "현재 출력은 시작할 때의 프로젝트 스냅샷을 사용합니다. 전환하려면 먼저 "
+                "FFmpeg와 임시 파일을 안전하게 정리해야 합니다."
+            ),
+            actions=[
+                (
+                    "출력 취소 후 전환",
+                    lambda: self._cancel_export_then(continuation),
+                    False,
+                ),
+                ("전환하지 않음", lambda: None, True),
+            ],
+            parent=self,
+        )
+        self._show_dialog(dialog)
+
+    def _cancel_export_then(self, continuation: Callable[[], None]) -> None:
+        self._pending_after_export = lambda: self._guard_unsaved(continuation)
+        self.controller.cancel_export()
+        if self._export_bridge.active:
+            self._export_bridge.cancel()
+            return
+        pending, self._pending_after_export = self._pending_after_export, None
+        if pending is not None:
+            QTimer.singleShot(0, pending)
 
     def _choose_project_to_open(self) -> str | None:
         path, _selected_filter = QFileDialog.getOpenFileName(
@@ -2036,6 +2098,22 @@ class MainWindow(QMainWindow):
             "Movie Maker 프로젝트 (*.mmrproj);;JSON 파일 (*.json)",
         )
         return path or None
+
+    def _choose_export_path(self, current_path: str) -> str | None:
+        suggested = current_path or f"{self.controller.state.project_name}.mp4"
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "동영상 저장",
+            suggested,
+            "MP4 동영상 (*.mp4)",
+            options=QFileDialog.Option.DontConfirmOverwrite,
+        )
+        return path or None
+
+    @staticmethod
+    def _open_export_result_folder(output_path: str) -> bool:
+        directory = str(Path(output_path).resolve(strict=False).parent)
+        return QDesktopServices.openUrl(QUrl.fromLocalFile(directory))
 
     def _request_save(self, *, save_as: bool = False) -> bool:
         target = self.controller.state.project_path
@@ -2109,31 +2187,143 @@ class MainWindow(QMainWindow):
     def _open_export_settings(self) -> None:
         if not self.controller.open_export_configuration():
             return
-        dialog = ExportSettingsDialog(self.controller.state, self)
+        dialog = ExportSettingsDialog(
+            self.controller.state,
+            self,
+            path_selector=self._export_path_selector,
+        )
         dialog.export_requested.connect(self._begin_export)
         self._show_dialog(dialog)
 
     def _begin_export(self, path: str, preset: str, framerate: str, quality: str) -> None:
-        self.controller.configure_export(
+        if self._export_bridge.active:
+            self.controller.report_status("이미 동영상을 저장하고 있습니다")
+            return
+        if not self.controller.configure_export(
             path=path,
             preset=preset,
             framerate=framerate,
             quality=quality,
+        ):
+            return
+        preset_value = {
+            "원본 유지": ExportPreset.ORIGINAL,
+            "720p": ExportPreset.HD_720,
+            "1080p": ExportPreset.HD_1080,
+        }.get(preset)
+        if preset_value is None:
+            self.controller.fail_export("지원하지 않는 출력 크기입니다.")
+            return
+        try:
+            plan = build_export_plan(
+                self.controller.media_project,
+                path,
+                preset_value,
+            )
+        except ExportPlanError as error:
+            self.controller.fail_export(str(error))
+            return
+        if Path(plan.target_path).exists():
+            dialog = DecisionDialog(
+                title="기존 동영상 교체",
+                heading="같은 이름의 파일을 교체할까요?",
+                body=(
+                    f"{plan.target_path}\n완성 파일의 검증이 끝날 때까지 기존 파일을 유지하며, "
+                    "실패하거나 취소하면 교체하지 않습니다."
+                ),
+                actions=[
+                    (
+                        "기존 파일 교체",
+                        lambda: self._start_export_with_overwrite(plan),
+                        False,
+                    ),
+                    ("다른 위치 선택", self._open_export_settings, True),
+                    ("취소", lambda: None, False),
+                ],
+                parent=self,
+            )
+            self._show_dialog(dialog)
+            return
+        self._start_export_plan(plan)
+
+    def _start_export_with_overwrite(self, plan: ExportPlan) -> None:
+        try:
+            confirmed = build_export_plan(
+                plan.project,
+                plan.target_path,
+                plan.preset,
+                overwrite_existing=True,
+                frame_rate=plan.frame_rate,
+            )
+        except ExportPlanError as error:
+            self.controller.fail_export(str(error))
+            return
+        self._start_export_plan(confirmed)
+
+    def _start_export_plan(self, plan: ExportPlan) -> None:
+        if not self.controller.start_export():
+            return
+        try:
+            self._export_bridge.start(plan)
+        except (ExportBusyError, RuntimeError) as error:
+            self.controller.fail_export(
+                "이미 동영상을 저장하고 있습니다.",
+                str(error),
+            )
+
+    def _accept_export_progress(self, value: object) -> None:
+        if not isinstance(value, ExportProgress):
+            return
+        self.controller.update_export_progress(
+            value.percent,
+            elapsed_ms=round(value.elapsed_seconds * 1_000),
+            eta_ms=(
+                round(value.estimated_remaining_seconds * 1_000)
+                if value.estimated_remaining_seconds is not None
+                else None
+            ),
+            verifying=value.stage is ExportProgressStage.VERIFYING,
         )
-        self.controller.start_export()
+
+    def _accept_export_result(self, value: object) -> None:
+        if isinstance(value, ExportSucceeded):
+            self.controller.complete_export(
+                value.output_path,
+                elapsed_ms=round(value.elapsed_seconds * 1_000),
+            )
+        elif isinstance(value, ExportFailed):
+            self.controller.fail_export(value.message, value.detail)
+        elif isinstance(value, ExportCancelled):
+            self.controller.complete_export_cancellation()
+        else:
+            return
+
+        pending, self._pending_after_export = self._pending_after_export, None
+        close_after, self._close_after_export = self._close_after_export, False
+        if pending is not None:
+            QTimer.singleShot(0, pending)
+        elif close_after:
+            QTimer.singleShot(0, self.close)
 
     def _request_cancel_export(self) -> None:
         dialog = DecisionDialog(
             title="동영상 저장 취소",
             heading="진행 중인 출력을 취소할까요?",
-            body="목업에서는 다음 진행 주기에 작업을 멈추고 불완전 파일이 없다고 표시합니다.",
+            body=(
+                "FFmpeg를 중지하고 같은 폴더의 임시 파일을 제거합니다. 기존 정상 파일과 "
+                "프로젝트 및 원본 미디어는 변경하지 않습니다."
+            ),
             actions=[
-                ("출력 취소", self.controller.cancel_export, False),
+                ("출력 취소", self._confirm_export_cancel, False),
                 ("계속 출력", lambda: None, True),
             ],
             parent=self,
         )
         self._show_dialog(dialog)
+
+    def _confirm_export_cancel(self) -> None:
+        if self.controller.cancel_export():
+            self._export_bridge.cancel()
 
     def _handle_export_result(self) -> None:
         if self.controller.state.export_state is ExportState.FAILED:
@@ -2141,9 +2331,11 @@ class MainWindow(QMainWindow):
             self._open_export_settings()
             return
         if self.controller.state.export_state is ExportState.COMPLETE:
-            self.controller.report_status(
-                "목업 결과이므로 파일 위치를 열지 않았습니다"
-            )
+            output_path = self.controller.state.export_result_path
+            if output_path is None or not self._export_result_opener(output_path):
+                self.controller.report_status("완성 파일의 폴더를 열지 못했습니다")
+                return
+            self.controller.report_status("완성 파일의 폴더를 열었습니다")
         self.controller.close_export_result()
 
     def _inject_and_show_missing(self) -> None:
@@ -2207,11 +2399,29 @@ class MainWindow(QMainWindow):
         event.ignore()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._export_bridge.active:
+            event.ignore()
+            dialog = DecisionDialog(
+                title="동영상 저장 중 종료",
+                heading="출력을 취소하고 편집기를 닫을까요?",
+                body=(
+                    "FFmpeg와 임시 파일 정리가 끝난 뒤 저장하지 않은 프로젝트 변경을 "
+                    "확인합니다. 기존 결과와 원본 미디어는 유지됩니다."
+                ),
+                actions=[
+                    ("출력 취소 후 닫기", self._cancel_export_for_close, False),
+                    ("계속 출력", lambda: None, True),
+                ],
+                parent=self,
+            )
+            self._show_dialog(dialog)
+            return
         if self._allow_close or not self.controller.state.is_dirty:
             self._preview_timer.stop()
             self._preview_bridge.close()
             self._audio_bridge.close()
             self._audio_output.close()
+            self._export_bridge.close()
             event.accept()
             return
         event.ignore()
@@ -2237,6 +2447,15 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._show_dialog(dialog)
+
+    def _cancel_export_for_close(self) -> None:
+        self._close_after_export = True
+        self.controller.cancel_export()
+        if self._export_bridge.active:
+            self._export_bridge.cancel()
+            return
+        self._close_after_export = False
+        QTimer.singleShot(0, self.close)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)

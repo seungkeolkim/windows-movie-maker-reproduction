@@ -64,7 +64,7 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 - `미디어 가져오기`는 운영체제 다중 파일 선택 창에서 선택한 실제 파일을 분석한다.
 - 후속 목업 흐름은 `샘플 편집 프로젝트 불러오기`의 정상 샘플 다섯 개를 사용한다.
 - `프로젝트 열기`와 `샘플 편집 프로젝트 불러오기`는 19초짜리 `제주 여행 목업`을 연다.
-- 선택한 원본은 읽기만 한다. 프로젝트 파일은 실제로 만들며 MP4 파일은 아직 만들지 않는다.
+- 선택한 원본은 읽기만 한다. 프로젝트 파일과 검증된 MP4 결과는 실제로 만든다.
 - 정상 흐름과 오류 흐름 모두 현재 프로젝트의 편집 상태를 잃지 않아야 한다.
 
 ## MVP 핵심 흐름
@@ -229,12 +229,12 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 
 - 원본 유지는 1920×1080 기준 미디어를, 720p와 1080p는 고정 16:9 크기를 표시한다.
 - 진행률, 현재 단계, 취소와 결과 행동을 편집 화면을 잃지 않고 확인할 수 있다.
-- 취소는 다음 주기에 완료되고 불완전 파일이 없다는 목업 정책을 말한다.
-- 완료 행동도 실제 MP4가 만들어지지 않았음을 명시한다.
+- 취소는 프로세스와 임시 파일 정리가 끝난 뒤 완료되며 기존 결과를 보존한다.
+- 완료는 검증된 실제 MP4 경로를 표시하고 해당 폴더를 열 수 있다.
 
-자동 검증: `test_export_dialog_explains_original_and_fixed_presets`,
+자동 검증: `tests/exporting/`, `test_export_dialog_explains_original_and_fixed_presets`,
 `test_export_progress_panel_exposes_complete_and_failure_states`,
-`test_export_can_complete_cancel_and_fail_without_creating_a_file`.
+`test_export_integration.py`.
 
 ## 1.0 대표 흐름
 

@@ -26,7 +26,8 @@
 | 17 | [DESIGN-0006: 타임라인 편집 명령 계약](design/design-0006-timeline-editing-contract.md) | W-04 클립 편집, 경계 스냅, 리플과 실제 명령·UI 연결 |
 | 18 | [DESIGN-0007: 미리 보기 시간축과 디코딩 계약](design/design-0007-preview-playback-contract.md) | W-05 시간 변환, 실제 프레임 디코딩, 동시성·취소와 오류 경계 |
 | 19 | [DESIGN-0008: 원본음·음악 믹싱 계약](design/design-0008-audio-mixing-contract.md) | W-06 오디오 상태, 공통 FFmpeg 그래프, 미리 듣기·취소와 장치 경계 |
-| 20 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
+| 20 | [DESIGN-0009: FFmpeg MP4 출력 계약](design/design-0009-mp4-export-contract.md) | W-07 렌더 계획, 진행·취소, 검증과 안전한 파일 게시 |
+| 21 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
 
 제품 방향만 파악할 때는 1~4번을 읽는다. 화면을 변경하려면 DESIGN과 MOCK 문서까지, 실제
 로직을 연결하려면 MOCK-0003의 연결 순서와 관련 ADR까지 읽는다. 정책 문서는 미디어, 출력,
@@ -55,6 +56,7 @@
 | 타임라인 클립을 어떤 시간·리플·명령 규칙으로 편집하는가 | [DESIGN-0006](design/design-0006-timeline-editing-contract.md) | [ADR-0002](decisions/adr-0002-command-based-edit-history.md) |
 | 프로젝트 위치를 실제 영상·사진 프레임으로 어떻게 재생하는가 | [DESIGN-0007](design/design-0007-preview-playback-contract.md) | [ADR-0003](decisions/adr-0003-project-core-state-and-storage.md) |
 | 영상 원본음과 음악을 어떻게 저장·혼합하고 미리 듣는가 | [DESIGN-0008](design/design-0008-audio-mixing-contract.md) | [DESIGN-0007](design/design-0007-preview-playback-contract.md) |
+| 편집 결과를 어떻게 검증된 MP4로 안전하게 출력하는가 | [DESIGN-0009](design/design-0009-mp4-export-contract.md) | [DESIGN-0008](design/design-0008-audio-mixing-contract.md) |
 | 개발 및 실행 명령은 무엇인가 | [프로젝트 README](../README.md) | [스크립트 안내](../scripts/README.md) |
 | 출력 영상, FFmpeg, 코덱과 기본 자산의 권리 범위는 무엇인가 | [POLICY-0001](policies/policy-0001-licensing-and-output-rights.md) | [프로젝트 README](../README.md) |
 | 문서 파일의 이름과 위치를 어떻게 정하는가 | 이 문서 | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) |
@@ -86,11 +88,10 @@
 | `W-04` 타임라인 편집 명령 | 완료 | [DESIGN-0006](design/design-0006-timeline-editing-contract.md), [타임라인 소스](../src/movie_maker/timeline/), [타임라인 테스트](../tests/timeline/) |
 | `W-05` 미리 보기 시간축과 디코딩 | 완료 | [DESIGN-0007](design/design-0007-preview-playback-contract.md), [미리 보기 소스](../src/movie_maker/preview/), [미리 보기 테스트](../tests/preview/) |
 | `W-06` 원본음·음악 믹싱 | 완료 | [DESIGN-0008](design/design-0008-audio-mixing-contract.md), [오디오 소스](../src/movie_maker/audio/), [오디오 테스트](../tests/audio/) |
-| `W-07` FFmpeg MP4 출력 | 다음 작업 | [MOCK-0003 연결 순서](mock/mock-0003-review-log.md#실제-로직-연결-순서) |
+| `W-07` FFmpeg MP4 출력 | 완료 | [DESIGN-0009](design/design-0009-mp4-export-contract.md), [출력 소스](../src/movie_maker/exporting/), [출력 테스트](../tests/exporting/) |
 
-W-07 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순서와 검증 기준은 MOCK-0003을
-따른다. W-06은 스키마 1의 호환 가능한 선택 필드에 오디오 값을 저장하며 DB 없이 단일 JSON
-프로젝트와 세션 메모리 썸네일·프레임·PCM을 사용한다.
+W-08 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순서와 검증 기준은 MOCK-0003을
+따른다. W-07도 DB를 추가하지 않고 불변 프로젝트 스냅샷과 같은 폴더 임시 MP4만 사용한다.
 
 ## 카테고리와 파일명 규칙
 
@@ -138,6 +139,7 @@ W-07 이후 작업은 선행 서비스 결과에 따라 시작하며 전체 순�
 | `DESIGN-0006` | 승인됨 | [타임라인 편집 명령 계약](design/design-0006-timeline-editing-contract.md) |
 | `DESIGN-0007` | 승인됨 | [미리 보기 시간축과 디코딩 계약](design/design-0007-preview-playback-contract.md) |
 | `DESIGN-0008` | 승인됨 | [원본음·음악 믹싱 계약](design/design-0008-audio-mixing-contract.md) |
+| `DESIGN-0009` | 승인됨 | [FFmpeg MP4 출력 계약](design/design-0009-mp4-export-contract.md) |
 | `MOCK-0001` | 승인됨 | [목업 동작 및 상태 명세](mock/mock-0001-behavior-specification.md) |
 | `MOCK-0002` | 승인됨 | [인터랙티브 목업 검증 시나리오](mock/mock-0002-validation-scenarios.md) |
 | `MOCK-0003` | 승인됨 | [목업 검토 기록과 UI 기준선](mock/mock-0003-review-log.md) |

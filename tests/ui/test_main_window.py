@@ -164,8 +164,8 @@ def test_export_progress_panel_exposes_complete_and_failure_states(qtbot) -> Non
     window.show()
 
     window.controller.start_export()
-    for _ in range(20):
-        window.controller.advance_export()
+    window.controller.update_export_progress(99, elapsed_ms=1_000, eta_ms=100, verifying=True)
+    window.controller.complete_export("C:/Videos/result.mp4", elapsed_ms=1_500)
 
     assert window.controller.state.export_state is ExportState.COMPLETE
     assert window.export_panel.isVisible()
@@ -173,10 +173,8 @@ def test_export_progress_panel_exposes_complete_and_failure_states(qtbot) -> Non
     assert "완료" in window.export_stage.text()
 
     window.controller.close_export_result()
-    window.controller.reserve_export_failure("FFmpeg를 찾을 수 없습니다")
     window.controller.start_export()
-    for _ in range(5):
-        window.controller.advance_export()
+    window.controller.fail_export("FFmpeg를 찾을 수 없습니다")
 
     assert window.controller.state.export_state is ExportState.FAILED
     assert "FFmpeg" in window.export_stage.text()

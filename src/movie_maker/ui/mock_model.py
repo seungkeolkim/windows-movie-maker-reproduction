@@ -32,7 +32,7 @@ class TrackKind(str, Enum):
 
 
 class ExportState(str, Enum):
-    """States of the simulated export job."""
+    """Presentation states of the real export job."""
 
     CLOSED = "닫힘"
     CONFIG = "설정"
@@ -129,11 +129,15 @@ class MockProjectState:
     export_state: ExportState = ExportState.CLOSED
     export_progress: int = 0
     export_preset: str = "원본 유지"
-    export_path: str = r"C:\Videos\제주 여행 목업.mp4"
-    export_framerate: str = "원본"
+    export_path: str = ""
+    export_framerate: str = "30 fps"
     export_quality: str = "권장"
-    pending_export_error: str | None = None
     export_error: str | None = None
+    export_error_detail: str | None = None
+    export_elapsed_ms: int = 0
+    export_eta_ms: int | None = None
+    export_result_path: str | None = None
+    export_stage: str = "encoding"
     import_warning: str | None = None
     status_message: str = "준비됨 · 인터랙티브 목업"
 
