@@ -1,0 +1,63 @@
+"""Typed creative editing, composition, and narration services."""
+
+from movie_maker.creative.commands import (
+    DEFAULT_TEXT_DURATION,
+    DEFAULT_TRANSITION_DURATION,
+    AddRecordedNarration,
+    AddTextClip,
+    UpdateMixerSettings,
+    UpdateTextProperties,
+    UpdateTransition,
+    UpdateVisualProperties,
+)
+from movie_maker.creative.composition import (
+    CompositionError,
+    CompositionPlan,
+    FontResolution,
+    TextLayer,
+    VisualSource,
+    build_composition_plan,
+    composition_video_filter,
+    fit_geometry,
+    oriented_source_size,
+    resolve_font,
+)
+from movie_maker.creative.recording import (
+    CaptureControl,
+    InputDevice,
+    InputDeviceBackend,
+    NarrationRecordingCoordinator,
+    RecordingErrorCode,
+    RecordingFailure,
+    RecordingSnapshot,
+    RecordingState,
+)
+
+__all__ = [
+    "DEFAULT_TEXT_DURATION",
+    "DEFAULT_TRANSITION_DURATION",
+    "AddRecordedNarration",
+    "AddTextClip",
+    "CaptureControl",
+    "CompositionError",
+    "CompositionPlan",
+    "FontResolution",
+    "InputDevice",
+    "InputDeviceBackend",
+    "NarrationRecordingCoordinator",
+    "RecordingErrorCode",
+    "RecordingFailure",
+    "RecordingSnapshot",
+    "RecordingState",
+    "TextLayer",
+    "UpdateMixerSettings",
+    "UpdateTextProperties",
+    "UpdateTransition",
+    "UpdateVisualProperties",
+    "VisualSource",
+    "build_composition_plan",
+    "composition_video_filter",
+    "fit_geometry",
+    "oriented_source_size",
+    "resolve_font",
+]

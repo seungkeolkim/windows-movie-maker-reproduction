@@ -28,7 +28,7 @@ class PreviewBridge(QObject):
         self._coordinator = coordinator or PreviewDecodeCoordinator()
         self._busy = False
         self._closed = False
-        self._active_key: tuple[str, str, str, int, int] | None = None
+        self._active_key: tuple[object, ...] | None = None
         self._pending: FrameTarget | None = None
         self._worker_result.connect(self._deliver)
 

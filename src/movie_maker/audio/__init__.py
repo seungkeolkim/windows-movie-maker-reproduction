@@ -10,6 +10,8 @@ from movie_maker.audio.decoder import (
     FfmpegAudioDecoder,
 )
 from movie_maker.audio.graph import (
+    DUCKING_ATTACK,
+    DUCKING_RELEASE,
     MAX_AUDIO_RATE,
     MIN_AUDIO_RATE,
     OUTPUT_CHANNELS,
@@ -20,6 +22,7 @@ from movie_maker.audio.graph import (
     AudioGraphErrorCode,
     AudioSource,
     AudioSourceKind,
+    DuckingWindow,
     audio_frames_for_time,
     build_audio_graph,
     ffmpeg_audio_arguments,
@@ -28,6 +31,8 @@ from movie_maker.audio.graph import (
 )
 
 __all__ = [
+    "DUCKING_ATTACK",
+    "DUCKING_RELEASE",
     "MAX_AUDIO_RATE",
     "MIN_AUDIO_RATE",
     "OUTPUT_CHANNELS",
@@ -44,6 +49,7 @@ __all__ = [
     "AudioSource",
     "AudioSourceKind",
     "DecodedAudio",
+    "DuckingWindow",
     "FfmpegAudioDecoder",
     "audio_frames_for_time",
     "build_audio_graph",

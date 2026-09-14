@@ -346,10 +346,12 @@ def _parse_stream_if_supported(value: object) -> _ParsedStream | None:
     sample_rate: int | None = None
     if kind is MediaStreamKind.VIDEO:
         average_frame_rate = _frame_rate(stream.get("avg_frame_rate"), index=index)
+        rotation_degrees = _rotation_degrees(stream, index=index)
     else:
         sample_rate = _integer(stream.get("sample_rate"), "sample_rate")
         if sample_rate is not None and sample_rate <= 0:
             raise _InvalidMedia(f"Audio stream {index} has an invalid sample rate.")
+        rotation_degrees = 0
 
     metadata = MediaStream(
         index=index,
@@ -360,6 +362,7 @@ def _parse_stream_if_supported(value: object) -> _ParsedStream | None:
         duration_ts=duration_ts,
         average_frame_rate=average_frame_rate,
         sample_rate=sample_rate,
+        rotation_degrees=rotation_degrees,
     )
     width = _positive_integer(stream.get("width"))
     height = _positive_integer(stream.get("height"))
@@ -455,6 +458,28 @@ def _decimal_seconds(value: object) -> Decimal | None:
     if not duration.is_finite() or duration <= 0:
         return None
     return duration
+
+
+def _rotation_degrees(stream: dict[str, object], *, index: int) -> int:
+    """Read ffprobe rotation metadata without treating it as a user edit."""
+
+    candidate: object | None = None
+    side_data = stream.get("side_data_list")
+    if isinstance(side_data, list):
+        for item in side_data:
+            if isinstance(item, dict) and "rotation" in item:
+                candidate = item["rotation"]
+                break
+    if candidate is None:
+        tags = stream.get("tags")
+        if isinstance(tags, dict):
+            candidate = tags.get("rotate")
+    if candidate is None:
+        return 0
+    parsed = _integer(candidate, f"stream {index} rotation")
+    if parsed is None:
+        return 0
+    return parsed % 360
 
 
 def _project_duration(value: object) -> ProjectTime | None:

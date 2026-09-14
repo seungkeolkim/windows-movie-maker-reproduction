@@ -150,6 +150,10 @@ UI 구조와 분리해 같은 용어를 메뉴, 상태와 대화상자에서 재
 | --- | --- | --- | --- |
 | `E-PROJECT-NAME` | MVP | 프로젝트 표시 이름 | `F-PROJECT-01`~`04` |
 | `E-PROJECT-ASPECT` | MVP | `원본 유지`, `16:9`, 1.0 `4:3` | `F-VISUAL-04` |
+| `E-MIXER-ORIGINAL` | 1.0 | 모든 영상 원본음 버스 0~100% | `F-AUDIO-09` |
+| `E-MIXER-MUSIC` | 1.0 | 모든 음악 버스 0~100% | `F-AUDIO-09` |
+| `E-MIXER-NARRATION` | 1.0 | 모든 내레이션 버스 0~100% | `F-AUDIO-09` |
+| `E-MIXER-APPLY` | 1.0 | 세 버스를 명령 하나로 함께 적용 | `F-AUDIO-09` |
 | `E-PROJECT-SUMMARY` | MVP | 전체 길이, 시각 클립 수, 오디오 항목 수 | `F-EXPERIENCE-01` |
 
 ### 영상·사진 클립 페이지
@@ -167,6 +171,7 @@ UI 구조와 분리해 같은 용어를 메뉴, 상태와 대화상자에서 재
 | `E-CLIP-ROTATE-LEFT` | 1.0 | 선택 클립을 왼쪽으로 90도 회전 | `F-VISUAL-03` |
 | `E-CLIP-ROTATE-RIGHT` | 1.0 | 선택 클립을 오른쪽으로 90도 회전 | `F-VISUAL-03` |
 | `E-CLIP-EFFECT` | 1.0 | 기본 효과 프리셋과 밝기 | `F-VISUAL-07`, `08` |
+| `E-CLIP-BRIGHTNESS` | 1.0 | -100~100 제한 밝기 | `F-VISUAL-07` |
 
 ### 오디오 페이지
 
@@ -179,7 +184,7 @@ UI 구조와 분리해 같은 용어를 메뉴, 상태와 대화상자에서 재
 | `E-AUDIO-FADE-IN` | 1.0 | 없음 또는 지원 길이 | `F-AUDIO-06` |
 | `E-AUDIO-FADE-OUT` | 1.0 | 없음 또는 지원 길이 | `F-AUDIO-06` |
 | `E-AUDIO-DUCKING` | 1.0 | 꺼짐, 약하게, 보통, 강하게 | `F-AUDIO-10` |
-| `E-AUDIO-WAVEFORM` | 1.0 | 실제 분석과 구분되는 장식 파형 및 생성 상태 | `F-AUDIO-05`, `F-MEDIA-09` |
+| `E-AUDIO-WAVEFORM` | 1.0 | W-09에서는 파형 없음 안내, 실제 생성 상태는 W-10 | `F-AUDIO-05`, `F-MEDIA-09` |
 
 ### 텍스트 페이지
 

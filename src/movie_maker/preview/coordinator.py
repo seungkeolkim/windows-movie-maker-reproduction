@@ -41,7 +41,7 @@ class PreviewDecodeCoordinator:
             thread_name_prefix="movie-maker-preview",
         )
         self._cache_size = cache_size
-        self._cache: OrderedDict[tuple[str, str, str, int, int], DecodedFrame] = OrderedDict()
+        self._cache: OrderedDict[tuple[object, ...], DecodedFrame] = OrderedDict()
         self._lock = Lock()
         self._generation = 0
         self._closed = False

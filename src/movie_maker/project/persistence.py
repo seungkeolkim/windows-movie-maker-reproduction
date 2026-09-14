@@ -12,18 +12,32 @@ from typing import Any
 from movie_maker.project.model import (
     CURRENT_PROJECT_SCHEMA_VERSION,
     AudioLevel,
+    Brightness,
     Canvas,
     Clip,
+    DuckingPreset,
+    FitMode,
     MediaKind,
     MediaReference,
     MediaStream,
     MediaStreamKind,
     MediaTimeBase,
+    MixerSettings,
+    NormalizedPosition,
     PlaybackRate,
     Project,
     ProjectValidationError,
+    TextAlignment,
+    TextAnimationPreset,
+    TextKind,
+    TextOverlay,
+    TextStyle,
     TimelineTrack,
     TrackKind,
+    Transition,
+    TransitionPreset,
+    UserRotation,
+    VisualEffectPreset,
 )
 from movie_maker.project.time import FrameRate, ProjectTime
 
@@ -120,6 +134,7 @@ def _stream_to_document(stream: MediaStream) -> JsonObject:
         "duration_ts": stream.duration_ts,
         "average_frame_rate": None,
         "sample_rate": stream.sample_rate,
+        "rotation_degrees": stream.rotation_degrees,
     }
     if stream.average_frame_rate is not None:
         result["average_frame_rate"] = _ratio_document(
@@ -144,7 +159,7 @@ def _media_to_document(media: MediaReference) -> JsonObject:
 
 
 def _clip_to_document(clip: Clip) -> JsonObject:
-    return {
+    result: JsonObject = {
         "clip_id": clip.clip_id,
         "asset_id": clip.asset_id,
         "label": clip.label,
@@ -160,7 +175,31 @@ def _clip_to_document(clip: Clip) -> JsonObject:
         ),
         "audio_level_percent": clip.audio_level.percent,
         "audio_muted": clip.audio_muted,
+        "fade_in_ns": clip.fade_in.nanoseconds,
+        "fade_out_ns": clip.fade_out.nanoseconds,
+        "ducking_preset": clip.ducking.value,
     }
+    if clip.track is TrackKind.VISUAL:
+        result["visual"] = {
+            "fit_mode": clip.fit_mode.value,
+            "user_rotation_degrees": int(clip.user_rotation),
+            "brightness_percent": clip.brightness.percent,
+            "effect_preset": clip.effect_preset.value,
+        }
+    if clip.text is not None:
+        result["text"] = {
+            "kind": clip.text.kind.value,
+            "content": clip.text.content,
+            "font_family": clip.text.style.font_family,
+            "size": clip.text.style.size,
+            "bold": clip.text.style.bold,
+            "color": clip.text.style.color,
+            "outline_color": clip.text.style.outline_color,
+            "alignment": clip.text.style.alignment.value,
+            "position": {"x": clip.text.position.x, "y": clip.text.position.y},
+            "animation": clip.text.animation.value,
+        }
+    return result
 
 
 def project_to_document(project: Project) -> JsonObject:
@@ -176,6 +215,20 @@ def project_to_document(project: Project) -> JsonObject:
             "reference_asset_id": project.canvas.reference_asset_id,
         },
         "media": [_media_to_document(media) for media in project.media],
+        "mixer": {
+            "original_level_percent": project.mixer.original.percent,
+            "music_level_percent": project.mixer.music.percent,
+            "narration_level_percent": project.mixer.narration.percent,
+        },
+        "transitions": [
+            {
+                "left_clip_id": transition.left_clip_id,
+                "right_clip_id": transition.right_clip_id,
+                "preset": transition.preset.value,
+                "duration_ns": transition.duration.nanoseconds,
+            }
+            for transition in project.transitions
+        ],
         "timeline": {
             track.kind.value: [_clip_to_document(clip) for clip in track.clips]
             for track in project.tracks
@@ -204,6 +257,9 @@ def _parse_stream(value: object, label: str) -> MediaStream:
         duration_ts=_optional_integer(stream.get("duration_ts"), f"{label}.duration_ts"),
         average_frame_rate=average_frame_rate,
         sample_rate=_optional_integer(stream.get("sample_rate"), f"{label}.sample_rate"),
+        rotation_degrees=_integer(
+            stream.get("rotation_degrees", 0), f"{label}.rotation_degrees"
+        ),
     )
 
 
@@ -243,6 +299,43 @@ def _parse_clip(value: object, track: TrackKind, index: int) -> Clip:
     asset_value = clip.get("asset_id")
     if asset_value is not None:
         asset_value = _string(asset_value, f"{label}.asset_id")
+    visual_value = clip.get("visual", {})
+    visual = _mapping(visual_value, f"{label}.visual")
+    text_overlay: TextOverlay | None = None
+    text_value = clip.get("text")
+    if track is TrackKind.TEXT:
+        if text_value is None:
+            text_overlay = TextOverlay()
+        else:
+            text = _mapping(text_value, f"{label}.text")
+            position = _mapping(text.get("position", {}), f"{label}.text.position")
+            text_overlay = TextOverlay(
+                kind=TextKind(_string(text.get("kind", "caption"), f"{label}.text.kind")),
+                content=_string(text.get("content", ""), f"{label}.text.content"),
+                style=TextStyle(
+                    font_family=_string(
+                        text.get("font_family", "Malgun Gothic"),
+                        f"{label}.text.font_family",
+                    ),
+                    size=_integer(text.get("size", 32), f"{label}.text.size"),
+                    bold=_boolean(text.get("bold", True), f"{label}.text.bold"),
+                    color=_string(text.get("color", "#FFFFFF"), f"{label}.text.color"),
+                    outline_color=_string(
+                        text.get("outline_color", "#000000"),
+                        f"{label}.text.outline_color",
+                    ),
+                    alignment=TextAlignment(
+                        _string(text.get("alignment", "center"), f"{label}.text.alignment")
+                    ),
+                ),
+                position=NormalizedPosition(
+                    _integer(position.get("x", 5_000), f"{label}.text.position.x"),
+                    _integer(position.get("y", 8_500), f"{label}.text.position.y"),
+                ),
+                animation=TextAnimationPreset(
+                    _string(text.get("animation", "none"), f"{label}.text.animation")
+                ),
+            )
     return Clip(
         clip_id=_string(_required(clip, "clip_id", label), f"{label}.clip_id"),
         track=track,
@@ -269,6 +362,37 @@ def _parse_clip(value: object, track: TrackKind, index: int) -> Clip:
             )
         ),
         audio_muted=_boolean(clip.get("audio_muted", False), f"{label}.audio_muted"),
+        fade_in=ProjectTime(
+            _integer(clip.get("fade_in_ns", 0), f"{label}.fade_in_ns")
+        ),
+        fade_out=ProjectTime(
+            _integer(clip.get("fade_out_ns", 0), f"{label}.fade_out_ns")
+        ),
+        ducking=DuckingPreset(
+            _string(clip.get("ducking_preset", "off"), f"{label}.ducking_preset")
+        ),
+        fit_mode=FitMode(
+            _string(visual.get("fit_mode", "fit"), f"{label}.visual.fit_mode")
+        ),
+        user_rotation=UserRotation(
+            _integer(
+                visual.get("user_rotation_degrees", 0),
+                f"{label}.visual.user_rotation_degrees",
+            )
+        ),
+        brightness=Brightness(
+            _integer(
+                visual.get("brightness_percent", 0),
+                f"{label}.visual.brightness_percent",
+            )
+        ),
+        effect_preset=VisualEffectPreset(
+            _string(
+                visual.get("effect_preset", "none"),
+                f"{label}.visual.effect_preset",
+            )
+        ),
+        text=text_overlay,
     )
 
 
@@ -304,6 +428,51 @@ def project_from_document(value: object) -> Project:
             )
             for kind in TrackKind
         )
+        mixer_value = _mapping(document.get("mixer", {}), "mixer")
+        transitions_value = _sequence(document.get("transitions", []), "transitions")
+        transitions = tuple(
+            Transition(
+                left_clip_id=_string(
+                    _required(
+                        transition_data := _mapping(
+                            transition, f"transitions[{index}]"
+                        ),
+                        "left_clip_id",
+                        f"transitions[{index}]",
+                    ),
+                    f"transitions[{index}].left_clip_id",
+                ),
+                right_clip_id=_string(
+                    _required(
+                        transition_data,
+                        "right_clip_id",
+                        f"transitions[{index}]",
+                    ),
+                    f"transitions[{index}].right_clip_id",
+                ),
+                preset=TransitionPreset(
+                    _string(
+                        _required(
+                            transition_data,
+                            "preset",
+                            f"transitions[{index}]",
+                        ),
+                        f"transitions[{index}].preset",
+                    )
+                ),
+                duration=ProjectTime(
+                    _integer(
+                        _required(
+                            transition_data,
+                            "duration_ns",
+                            f"transitions[{index}]",
+                        ),
+                        f"transitions[{index}].duration_ns",
+                    )
+                ),
+            )
+            for index, transition in enumerate(transitions_value)
+        )
         return Project(
             schema_version=schema_version,
             project_id=_string(
@@ -322,6 +491,27 @@ def project_from_document(value: object) -> Project:
                 )
             ),
             tracks=tracks,
+            mixer=MixerSettings(
+                original=AudioLevel(
+                    _integer(
+                        mixer_value.get("original_level_percent", 100),
+                        "mixer.original_level_percent",
+                    )
+                ),
+                music=AudioLevel(
+                    _integer(
+                        mixer_value.get("music_level_percent", 100),
+                        "mixer.music_level_percent",
+                    )
+                ),
+                narration=AudioLevel(
+                    _integer(
+                        mixer_value.get("narration_level_percent", 100),
+                        "mixer.narration_level_percent",
+                    )
+                ),
+            ),
+            transitions=transitions,
         )
     except UnsupportedProjectVersion:
         raise

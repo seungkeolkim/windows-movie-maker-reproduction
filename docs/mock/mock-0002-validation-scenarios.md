@@ -264,23 +264,25 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 
 연결 기능: `F-AUDIO-05`~`11`, `F-MEDIA-08`, `09`.
 
-1. `내레이션 녹음`을 열고 가짜 입력 수준, 시작, 일시 정지와 완료를 확인한다.
-2. 완료한 5초 목업 녹음을 내레이션 트랙에 추가한다.
+1. `내레이션 녹음`을 열고 실제 입력 장치, 입력 수준, 시작, 일시 정지·계속과 완료를 확인한다.
+2. 최종 WAV 경로를 선택하고 완료한 녹음이 보관함과 내레이션 트랙에 한 번만 추가되는지 확인한다.
 3. 시작, 사용 구간, 음량, 음소거, 페이드와 더킹을 적용한다.
-4. 음악 트랙의 장식 파형과 백그라운드 작업 상태를 확인한다.
-5. 영상 미디어에서 프록시 사용·해제를 바꾸고 고정된 목업 준비 상태를 확인한다.
+4. 프로젝트 속성에서 원본음·음악·내레이션 전체 믹서 값을 함께 적용한다.
+5. 장치 없음·권한 거부·분리·기록 실패·디스크 부족과 취소에서 프로젝트와 파일을 확인한다.
 
 합격 기준:
 
-- 실제 마이크를 사용하지 않는다는 사실이 녹음 전후에 분명하다.
+- 녹음 캡처가 UI를 막지 않고 완료 전에는 최종 파일이나 프로젝트 참조가 생기지 않는다.
 - 음악과 내레이션은 서로 다른 고정 트랙과 속성 문맥을 사용한다.
 - 페이드 합이 클립보다 길면 적용하지 않고 이유를 표시한다.
-- 목업 파형을 실제 분석 결과로 표현하지 않는다.
-- 프록시 상태는 실제 파일 생성 없이 보관함과 상태 표시줄의 준비 개수에 함께 반영된다.
+- 세 버스 값과 개별 클립 값은 공통 오디오 그래프에서 결정적인 순서로 곱한다.
+- 내레이션 구간의 음악 더킹은 200 ms attack, 500 ms release와 선택 강도를 사용한다.
+- 파형은 없다고 명시하며 실제 파형·프록시 생성은 W-10으로 남긴다.
 
-자동 검증: `test_text_transition_and_narration_mock_commands_update_fixed_tracks`,
-`test_proxy_toggle_records_a_mock_media_edit_without_creating_files`.
-녹음 타이머와 속성 입력 제한은 수동 검증한다.
+자동 검증: `test_record_pause_resume_finish_publishes_one_verified_wav`,
+`test_cancel_and_backend_failure_remove_unique_temporary_file`,
+`test_no_device_and_disk_full_are_distinct_and_preserve_files`,
+`test_narration_fades_bus_gain_and_ducking_share_one_audio_graph`.
 
 ### V-10-03: 제목, 캡션과 크레딧
 
@@ -294,11 +296,13 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 
 - 생성 위치 기본값이 텍스트 종류와 일치한다.
 - 속성은 한 패널에서 바뀌고 타임라인과 현재 위치의 미리 보기에 반영된다.
-- 빈 내용은 허용하되 미리 보기에는 `텍스트를 입력하세요`를 표시한다.
+- 빈 내용은 허용하고 편집 필드에는 `텍스트를 입력하세요` 플레이스홀더를 표시하되 실제 미리
+  보기와 출력에는 그 문구를 합성하지 않는다.
 - 안전 영역과 가독성 기본값을 유지한다.
 
-자동 검증: `test_text_transition_and_narration_mock_commands_update_fixed_tracks`.
-글꼴·색상·정렬 조합은 수동 검증한다.
+자동 검증: `test_text_fields_round_trip_and_old_documents_receive_safe_defaults`,
+`test_empty_text_is_not_composited_but_remains_in_project`,
+`test_text_kind_default_placements_are_deterministic`.
 
 ### V-10-04: 화면 배치, 회전, 효과와 전환
 
@@ -315,7 +319,9 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 - 전환은 인접 경계에만 놓이며 양쪽 클립이 허용하는 길이를 넘지 않는다.
 - 제한된 프리셋임을 보여 주고 고급 합성 도구처럼 확장하지 않는다.
 
-자동 검증: 속성 명령과 전환 상태는 컨트롤러 테스트가 확인한다. 시각적 구분은 수동 검증한다.
+자동 검증: `test_fit_fill_geometry_and_metadata_then_user_rotation_are_deterministic`,
+`test_transition_requires_adjacency_and_move_prunes_then_undo_restores`,
+`test_preview_and_mp4_use_the_same_real_transition_text_and_effect_pixels`.
 
 ## 오류와 회복 흐름
 

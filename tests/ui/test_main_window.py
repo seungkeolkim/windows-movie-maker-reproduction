@@ -1,7 +1,17 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QDialog, QFrame, QLabel, QListWidget, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QFrame,
+    QLabel,
+    QListWidget,
+    QPushButton,
+    QTextEdit,
+    QWidget,
+)
 
-from movie_maker.ui.dialogs import ExportSettingsDialog
+from movie_maker.creative import NarrationRecordingCoordinator
+from movie_maker.ui.dialogs import ExportSettingsDialog, NarrationDialog
 from movie_maker.ui.main_window import MainWindow
 from movie_maker.ui.mock_model import ExportState
 
@@ -103,6 +113,17 @@ def test_detailed_mvp_and_one_zero_controls_exist_in_context(qtbot) -> None:
         "E-CLIP-FIT",
         "E-CLIP-ROTATE",
         "E-CLIP-EFFECT",
+        "E-CLIP-BRIGHTNESS",
+        "E-MIXER-ORIGINAL",
+        "E-MIXER-MUSIC",
+        "E-MIXER-NARRATION",
+        "E-MIXER-APPLY",
+        "E-AUDIO-FADE-IN",
+        "E-AUDIO-FADE-OUT",
+        "E-AUDIO-DUCKING",
+        "E-TEXT-CONTENT",
+        "E-TRANSITION-TYPE",
+        "E-TRANSITION-DURATION",
         "E-MEDIA-PROXY",
         "E-MEDIA-PROXY-STATUS",
         "E-TIMELINE-TRIM-START",
@@ -114,6 +135,11 @@ def test_detailed_mvp_and_one_zero_controls_exist_in_context(qtbot) -> None:
         if child.objectName() in required_names
     }
     assert found == required_names
+    text_content = window.findChild(QTextEdit, "E-TEXT-CONTENT")
+    waveform = window.findChild(QLabel, "E-AUDIO-WAVEFORM")
+    assert text_content is not None
+    assert text_content.placeholderText() == "텍스트를 입력하세요"
+    assert waveform is not None and "파형 없음" in waveform.text()
 
     window.controller.select_asset("media-market")
     proxy_button = window.findChild(QPushButton, "E-MEDIA-PROXY")
@@ -122,6 +148,29 @@ def test_detailed_mvp_and_one_zero_controls_exist_in_context(qtbot) -> None:
     qtbot.mouseClick(proxy_button, Qt.MouseButton.LeftButton)
     assert "준비됨" in window.media_proxy_status.text()
     assert "목업 프록시 1개" in window.library_count.text()
+
+
+class _NoInputDeviceBackend:
+    def devices(self):
+        return ()
+
+    def capture_wav(self, device, temporary_path, control, progress) -> None:
+        raise AssertionError("capture must remain disabled without an input device")
+
+
+def test_narration_dialog_explains_and_disables_missing_input_device(qtbot) -> None:
+    coordinator = NarrationRecordingCoordinator(_NoInputDeviceBackend())
+    dialog = NarrationDialog(coordinator=coordinator, path_selector=lambda: None)
+    qtbot.addWidget(dialog)
+    try:
+        dialog.show()
+        assert not dialog.device.isEnabled()
+        assert not dialog.record_button.isEnabled()
+        assert "입력 장치 없음" in dialog.device.currentText()
+        assert "권한" in dialog.device.toolTip()
+    finally:
+        dialog.close()
+        coordinator.close()
 
 
 def test_ctrl_style_multi_selection_is_reflected_in_inspector(qtbot) -> None:
