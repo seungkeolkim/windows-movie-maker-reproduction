@@ -9,7 +9,7 @@
 | --- | --- | --- | --- |
 | `W-06` | 원본음·음악 믹싱 · 완료 | [w-06-audio-mixing.md](w-06-audio-mixing.md) | 실제 오디오 미리 듣기와 공통 믹싱 그래프 |
 | `W-07` | FFmpeg MP4 출력 · 완료 | [w-07-mp4-export.md](w-07-mp4-export.md) | H.264/AAC MP4 출력과 진행·취소·오류 처리 |
-| `W-08` | 고급 타임라인 | [w-08-advanced-timeline.md](w-08-advanced-timeline.md) | 복제·다중 선택·그룹 편집·보기 전환·확대 |
+| `W-08` | 고급 타임라인 · 완료 | [w-08-advanced-timeline.md](w-08-advanced-timeline.md) | 복제·다중 선택·그룹 편집·보기 전환·확대 |
 | `W-09` | 창작 기능 · 완료 | [w-09-creative-features.md](w-09-creative-features.md) | 내레이션·텍스트·전환·시각 효과 |
 | `W-10` | 복구와 백그라운드 작업 | [w-10-recovery-and-background-jobs.md](w-10-recovery-and-background-jobs.md) | 자동 저장·복구·다시 연결·파형·프록시 |
 | `W-11` | Windows 실행·설치 | [w-11-windows-launcher-and-installer.md](w-11-windows-launcher-and-installer.md) | 네이티브 런처와 설치·업데이트·제거 흐름 |
