@@ -1,3 +1,4 @@
+import wave
 from pathlib import Path
 
 from movie_maker.ui.mock_controller import MockController
@@ -164,7 +165,7 @@ def test_proxy_toggle_records_a_mock_media_edit_without_creating_files() -> None
     assert not controller.state.assets["media-market"].proxy_enabled
 
 
-def test_text_transition_and_narration_mock_commands_update_fixed_tracks() -> None:
+def test_text_transition_and_narration_commands_update_fixed_tracks(tmp_path: Path) -> None:
     controller = MockController()
     controller.load_sample_project()
     controller.select_clip("clip-market")
@@ -184,8 +185,52 @@ def test_text_transition_and_narration_mock_commands_update_fixed_tracks() -> No
     )
     assert controller.selected_clip.label == "캡션 · 제주 야시장"
 
-    controller.add_recorded_narration()
-    assert controller.state.narration_clips[-1].label == "목업 내레이션"
+    recording = tmp_path / "내레이션.wav"
+    with wave.open(str(recording), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(48_000)
+        output.writeframes(b"\x00\x00" * 48_000)
+    previous_history = controller.history_count
+
+    assert controller.add_recorded_narration(str(recording))
+    assert controller.state.narration_clips[-1].label == "내레이션.wav"
+    assert controller.history_count == previous_history + 1
+    assert controller.undo()
+    assert recording.is_file()
+    assert all(reference.source_path != str(recording) for reference in controller.media_project.media)
+
+
+def test_project_mixer_is_one_command_and_round_trips_through_undo() -> None:
+    controller = MockController()
+
+    assert controller.update_mixer(original=80, music=55, narration=95)
+    assert (
+        controller.media_project.mixer.original.percent,
+        controller.media_project.mixer.music.percent,
+        controller.media_project.mixer.narration.percent,
+    ) == (80, 55, 95)
+    assert controller.history_count == 1
+
+    assert controller.undo()
+    assert controller.media_project.mixer.original.percent == 100
+    assert controller.state.music_bus_volume == 100
+
+
+def test_legacy_mock_projection_does_not_drop_real_mixer_values(tmp_path: Path) -> None:
+    controller = MockController()
+    controller.load_sample_project()
+    assert controller.update_mixer(original=80, music=55, narration=95)
+
+    controller.select_asset("media-market")
+    assert controller.toggle_selected_proxy()
+    assert controller.save_project(str(tmp_path / "mixer.mmrproj"))
+
+    reopened = MockController()
+    assert reopened.open_project(str(tmp_path / "mixer.mmrproj"))
+
+    assert reopened.media_project.mixer.music.percent == 55
+    assert reopened.state.narration_bus_volume == 95
 
 
 def test_export_presentation_state_tracks_real_worker_updates() -> None:

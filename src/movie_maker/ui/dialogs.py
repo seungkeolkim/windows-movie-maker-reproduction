@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -23,9 +24,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from movie_maker.creative import (
+    NarrationRecordingCoordinator,
+    RecordingErrorCode,
+    RecordingFailure,
+    RecordingSnapshot,
+    RecordingState,
+)
 from movie_maker.ui.mock_model import MockProjectState
+from movie_maker.ui.narration import FfmpegInputDeviceBackend
 
 ExportPathSelector = Callable[[str], str | None]
+NarrationPathSelector = Callable[[], str | None]
 
 
 class ExportSettingsDialog(QDialog):
@@ -313,81 +323,157 @@ class RecoveryDialog(QDialog):
 
 
 class NarrationDialog(QDialog):
-    """S-NARRATION with a fake input meter and recording timer."""
+    """S-NARRATION backed by an off-UI-thread input coordinator."""
 
-    recording_added = Signal()
+    recording_added = Signal(str)
+    recording_state_received = Signal(object)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        coordinator: NarrationRecordingCoordinator | None = None,
+        path_selector: NarrationPathSelector | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("S-NARRATION")
-        self.setWindowTitle("내레이션 녹음 · 목업")
+        self.setWindowTitle("내레이션 녹음")
         self.setMinimumWidth(500)
-        self._elapsed_ms = 0
-        self._is_recording = False
-        self._timer = QTimer(self)
-        self._timer.setInterval(250)
-        self._timer.timeout.connect(self._tick)
+        self._coordinator = coordinator or NarrationRecordingCoordinator(
+            FfmpegInputDeviceBackend()
+        )
+        self._path_selector = path_selector or self._choose_path
+        self._owns_coordinator = coordinator is None
+        self._snapshot = RecordingSnapshot()
+        self.recording_state_received.connect(self._apply_snapshot)
 
         layout = QVBoxLayout(self)
         heading = QLabel("내레이션 녹음")
         heading.setObjectName("dialogHeading")
         layout.addWidget(heading)
         form = QFormLayout()
-        device = QComboBox()
-        device.setObjectName("E-NARRATION-DEVICE")
-        device.addItems(["기본 마이크 · 목업", "장치 없음 상태 · 목업"])
-        form.addRow("입력 장치", device)
+        self.device = QComboBox()
+        self.device.setObjectName("E-NARRATION-DEVICE")
+        devices = self._coordinator.devices()
+        for device in devices:
+            self.device.addItem(device.name, device.device_id)
+        if not devices:
+            self.device.addItem("입력 장치 없음", None)
+            self.device.setEnabled(False)
+            self.device.setToolTip("마이크를 연결하고 Windows 입력 권한을 확인하세요")
+        form.addRow("입력 장치", self.device)
         self.level = QProgressBar()
         self.level.setObjectName("E-NARRATION-LEVEL")
         self.level.setRange(0, 100)
-        self.level.setValue(28)
-        self.level.setFormat("입력 수준 %p% · 목업")
+        self.level.setValue(0)
+        self.level.setFormat("입력 수준 %p%")
         form.addRow("입력 수준", self.level)
         self.time_label = QLabel("00:00.000")
         self.time_label.setObjectName("E-NARRATION-TIME")
         form.addRow("녹음 시간", self.time_label)
         layout.addLayout(form)
-        note = QLabel("실제 마이크나 파일을 사용하지 않습니다. 완료하면 5초 샘플이 추가됩니다.")
-        note.setWordWrap(True)
-        note.setObjectName("secondaryText")
-        layout.addWidget(note)
+        self.status = QLabel(
+            "녹음 시작 전에 최종 WAV 경로를 선택합니다. 취소와 실패 시 임시 파일을 제거합니다."
+        )
+        self.status.setWordWrap(True)
+        self.status.setObjectName("secondaryText")
+        self.status.setAccessibleName("내레이션 녹음 상태")
+        layout.addWidget(self.status)
         row = QHBoxLayout()
         self.record_button = QPushButton("녹음 시작")
         self.record_button.setObjectName("E-NARRATION-RECORD")
-        self.record_button.clicked.connect(self._toggle_recording)
+        self.record_button.setEnabled(bool(devices))
+        self.record_button.clicked.connect(self._record_or_pause)
         row.addWidget(self.record_button)
         self.finish_button = QPushButton("완료하고 프로젝트에 추가")
         self.finish_button.setObjectName("E-NARRATION-FINISH")
         self.finish_button.setEnabled(False)
         self.finish_button.clicked.connect(self._finish)
         row.addWidget(self.finish_button)
-        cancel = QPushButton("취소")
-        cancel.setObjectName("E-NARRATION-CANCEL")
-        cancel.clicked.connect(self.reject)
-        row.addWidget(cancel)
+        self.cancel_button = QPushButton("취소")
+        self.cancel_button.setObjectName("E-NARRATION-CANCEL")
+        self.cancel_button.clicked.connect(self._cancel)
+        row.addWidget(self.cancel_button)
         layout.addLayout(row)
 
-    def _toggle_recording(self) -> None:
-        self._is_recording = not self._is_recording
-        if self._is_recording:
-            self.record_button.setText("일시 정지")
-            self._timer.start()
-        else:
-            self.record_button.setText("녹음 계속")
-            self._timer.stop()
+    @staticmethod
+    def _choose_path() -> str | None:
+        path, _ = QFileDialog.getSaveFileName(
+            None,
+            "내레이션 WAV 저장",
+            "내레이션.wav",
+            "WAV 오디오 (*.wav)",
+        )
+        return path or None
 
-    def _tick(self) -> None:
-        self._elapsed_ms += 250
-        seconds, millis = divmod(self._elapsed_ms, 1_000)
+    def _record_or_pause(self) -> None:
+        try:
+            if self._snapshot.state is RecordingState.IDLE:
+                target = self._path_selector()
+                device_id = self.device.currentData()
+                if target is None:
+                    self.status.setText("녹음 경로 선택을 취소했습니다")
+                    return
+                if not isinstance(device_id, str):
+                    raise RecordingFailure(
+                        RecordingErrorCode.NO_DEVICE, "사용할 입력 장치가 없습니다."
+                    )
+                self._coordinator.start(
+                    device_id,
+                    target,
+                    lambda snapshot: self.recording_state_received.emit(snapshot),
+                )
+            elif self._snapshot.state is RecordingState.RECORDING:
+                self._coordinator.pause()
+            elif self._snapshot.state is RecordingState.PAUSED:
+                self._coordinator.resume()
+        except (RecordingFailure, OSError, ValueError) as error:
+            self.status.setText(str(error))
+
+    def _apply_snapshot(self, value: object) -> None:
+        if not isinstance(value, RecordingSnapshot):
+            return
+        self._snapshot = value
+        elapsed_ms = value.elapsed_milliseconds
+        seconds, millis = divmod(elapsed_ms, 1_000)
         minutes, seconds = divmod(seconds, 60)
         self.time_label.setText(f"{minutes:02d}:{seconds:02d}.{millis:03d}")
-        self.level.setValue(25 + (self._elapsed_ms // 250 * 17) % 58)
-        self.finish_button.setEnabled(True)
+        self.level.setValue(value.input_level_percent)
+        self.status.setText(value.message)
+        self.status.setAccessibleDescription(value.message)
+        self.record_button.setText(
+            {
+                RecordingState.RECORDING: "일시 정지",
+                RecordingState.PAUSED: "녹음 계속",
+            }.get(value.state, "녹음 시작")
+        )
+        self.record_button.setEnabled(
+            value.state in {RecordingState.IDLE, RecordingState.RECORDING, RecordingState.PAUSED}
+        )
+        self.finish_button.setEnabled(
+            value.elapsed_frames > 0
+            and value.state in {RecordingState.RECORDING, RecordingState.PAUSED}
+        )
+        if value.state is RecordingState.COMPLETE and value.final_path is not None:
+            self.recording_added.emit(value.final_path)
+            self.accept()
 
     def _finish(self) -> None:
-        self._timer.stop()
-        self.recording_added.emit()
-        self.accept()
+        try:
+            self._coordinator.finish()
+        except RecordingFailure as error:
+            self.status.setText(str(error))
+
+    def _cancel(self) -> None:
+        self._coordinator.cancel()
+        self.reject()
+
+    def done(self, result: int) -> None:
+        if result != QDialog.DialogCode.Accepted:
+            self._coordinator.cancel()
+        if self._owns_coordinator:
+            self._coordinator.close()
+        super().done(result)
 
 
 class OnboardingDialog(QDialog):

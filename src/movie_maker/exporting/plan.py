@@ -7,6 +7,12 @@ from enum import Enum
 from pathlib import Path
 
 from movie_maker.audio import AudioGraph, AudioGraphError, build_audio_graph, ffmpeg_audio_filter
+from movie_maker.creative.composition import (
+    CompositionError,
+    CompositionPlan,
+    build_composition_plan,
+    composition_video_filter,
+)
 from movie_maker.project import (
     FrameRate,
     MediaKind,
@@ -37,6 +43,7 @@ class ExportPlanErrorCode(str, Enum):
     INVALID_TARGET = "invalid_target"
     NO_VIDEO_STREAM = "no_video_stream"
     INVALID_AUDIO_GRAPH = "invalid_audio_graph"
+    INVALID_COMPOSITION = "invalid_composition"
 
 
 class ExportPlanError(ValueError):
@@ -86,6 +93,7 @@ class ExportPlan:
     frame_rate: FrameRate
     duration: ProjectTime
     video_sources: tuple[VideoSource, ...]
+    composition: CompositionPlan
     audio_graph: AudioGraph
 
     def __post_init__(self) -> None:
@@ -95,6 +103,8 @@ class ExportPlan:
             raise ValueError("Export dimensions must be positive.")
         if self.audio_graph.project_id != self.project.project_id:
             raise ValueError("The audio graph must belong to the export project snapshot.")
+        if self.composition.project_id != self.project.project_id:
+            raise ValueError("The composition must belong to the export project snapshot.")
 
     @property
     def output_frame_count(self) -> int:
@@ -193,6 +203,10 @@ def build_export_plan(
             )
         )
     try:
+        composition = build_composition_plan(project, width=width, height=height)
+    except CompositionError as error:
+        raise ExportPlanError(ExportPlanErrorCode.INVALID_COMPOSITION, str(error)) from error
+    try:
         audio_graph = build_audio_graph(project)
     except AudioGraphError as error:
         raise ExportPlanError(ExportPlanErrorCode.INVALID_AUDIO_GRAPH, str(error)) from error
@@ -206,6 +220,7 @@ def build_export_plan(
         frame_rate=frame_rate,
         duration=project.duration,
         video_sources=tuple(sources),
+        composition=composition,
         audio_graph=audio_graph,
     )
 
@@ -225,38 +240,7 @@ def _pixel_format(plan: ExportPlan) -> str:
 
 
 def _video_filter(plan: ExportPlan) -> str:
-    from movie_maker.audio import format_audio_time
-
-    filters: list[str] = []
-    labels: list[str] = []
-    for index, source in enumerate(plan.video_sources):
-        label = f"v{index}"
-        labels.append(label)
-        if source.media_kind is MediaKind.PHOTO:
-            timing = f"trim=duration={format_audio_time(source.duration)}"
-        else:
-            assert source.source_out is not None
-            timing = (
-                f"trim=start={format_audio_time(source.source_in)}:"
-                f"end={format_audio_time(source.source_out)},"
-                f"setpts=(PTS-STARTPTS)*{_setpts_rate(source.playback_rate)}"
-            )
-        chain = (
-            f"[{index}:{source.stream_index}]{timing},"
-            f"fps=fps={_format_rate(plan.frame_rate)}:start_time=0:round=near,"
-            f"scale={plan.width}:{plan.height}:force_original_aspect_ratio=decrease:"
-            "force_divisible_by=2:reset_sar=1,"
-            f"pad={plan.width}:{plan.height}:(ow-iw)/2:(oh-ih)/2:color={NEUTRAL_BACKGROUND},"
-            f"setsar=1,format={_pixel_format(plan)}[{label}]"
-        )
-        filters.append(chain)
-    inputs = "".join(f"[{label}]" for label in labels)
-    duration = format_audio_time(plan.duration)
-    filters.append(
-        f"{inputs}concat=n={len(labels)}:v=1:a=0,"
-        f"trim=duration={duration},setpts=PTS-STARTPTS[vout]"
-    )
-    return ";".join(filters)
+    return composition_video_filter(plan.composition)
 
 
 def ffmpeg_export_filter(plan: ExportPlan) -> str:

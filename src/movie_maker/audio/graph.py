@@ -8,7 +8,9 @@ from enum import Enum
 from fractions import Fraction
 
 from movie_maker.project import (
+    DEFAULT_AUDIO_LEVEL,
     AudioLevel,
+    DuckingPreset,
     MediaKind,
     MediaReference,
     MediaStream,
@@ -25,6 +27,9 @@ OUTPUT_BYTES_PER_SAMPLE = 2
 OUTPUT_FRAME_BYTES = OUTPUT_CHANNELS * OUTPUT_BYTES_PER_SAMPLE
 MIN_AUDIO_RATE = Fraction(1, 2)
 MAX_AUDIO_RATE = Fraction(2, 1)
+DUCKING_ATTACK = ProjectTime.from_milliseconds(200)
+DUCKING_RELEASE = ProjectTime.from_milliseconds(500)
+ZERO_AUDIO_TIME = ProjectTime.zero()
 
 
 class AudioGraphErrorCode(str, Enum):
@@ -46,6 +51,26 @@ class AudioGraphError(ValueError):
 class AudioSourceKind(str, Enum):
     ORIGINAL = "original"
     MUSIC = "music"
+    NARRATION = "narration"
+
+
+@dataclass(frozen=True, slots=True)
+class DuckingWindow:
+    """One narration interval and its deterministic music attenuation."""
+
+    start: ProjectTime
+    end: ProjectTime
+    preset: DuckingPreset
+    attack: ProjectTime = DUCKING_ATTACK
+    release: ProjectTime = DUCKING_RELEASE
+
+    def __post_init__(self) -> None:
+        if self.start.nanoseconds < 0 or self.end <= self.start:
+            raise ValueError("Ducking windows require an ordered positive interval.")
+        if self.preset is DuckingPreset.OFF:
+            raise ValueError("An off ducking preset does not define a window.")
+        if self.attack.nanoseconds < 0 or self.release.nanoseconds < 0:
+            raise ValueError("Ducking attack and release cannot be negative.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +89,12 @@ class AudioSource:
     playback_rate: PlaybackRate
     level: AudioLevel
     muted: bool
+    bus_level: AudioLevel = DEFAULT_AUDIO_LEVEL
+    clip_start: ProjectTime = ZERO_AUDIO_TIME
+    clip_duration: ProjectTime = ZERO_AUDIO_TIME
+    fade_in: ProjectTime = ZERO_AUDIO_TIME
+    fade_out: ProjectTime = ZERO_AUDIO_TIME
+    ducking_windows: tuple[DuckingWindow, ...] = ()
 
     def __post_init__(self) -> None:
         if self.source_in.nanoseconds < 0 or self.source_out <= self.source_in:
@@ -74,6 +105,22 @@ class AudioSource:
             raise ValueError("Audio stream index must be a non-negative integer.")
         if type(self.muted) is not bool:
             raise TypeError("Audio mute must be a boolean value.")
+        if not isinstance(self.bus_level, AudioLevel):
+            raise TypeError("Audio bus level must be an AudioLevel value.")
+        if self.clip_start.nanoseconds < 0:
+            raise ValueError("Audio clip start cannot be negative.")
+        if self.clip_duration == ZERO_AUDIO_TIME:
+            object.__setattr__(self, "clip_duration", self.duration)
+        if self.clip_duration.nanoseconds <= 0:
+            raise ValueError("Audio clip duration must be positive.")
+        if self.fade_in.nanoseconds < 0 or self.fade_out.nanoseconds < 0:
+            raise ValueError("Audio fades cannot be negative.")
+        if self.fade_in + self.fade_out > self.clip_duration:
+            raise ValueError("Audio fades cannot exceed the clip duration.")
+        if type(self.ducking_windows) is not tuple or any(
+            not isinstance(window, DuckingWindow) for window in self.ducking_windows
+        ):
+            raise TypeError("Ducking windows must be an immutable tuple.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +208,20 @@ def _source_time(
     )
 
 
+def _ducking_windows(project: Project) -> tuple[DuckingWindow, ...]:
+    windows: list[DuckingWindow] = []
+    for clip in project.track(TrackKind.NARRATION).clips:
+        if (
+            clip.ducking is DuckingPreset.OFF
+            or clip.audio_muted
+            or clip.audio_level.percent == 0
+            or project.mixer.narration.percent == 0
+        ):
+            continue
+        windows.append(DuckingWindow(clip.timeline_start, clip.timeline_end, clip.ducking))
+    return tuple(windows)
+
+
 def build_audio_graph(
     project: Project,
     *,
@@ -185,7 +246,8 @@ def build_audio_graph(
     graph_end = graph_start + graph_duration
     sources: list[AudioSource] = []
 
-    for track_kind in (TrackKind.VISUAL, TrackKind.MUSIC):
+    ducking_windows = _ducking_windows(project)
+    for track_kind in (TrackKind.VISUAL, TrackKind.MUSIC, TrackKind.NARRATION):
         for clip in project.track(track_kind).clips:
             media = project.media_reference(clip.asset_id or "")
             if track_kind is TrackKind.VISUAL and media.kind is not MediaKind.VIDEO:
@@ -225,7 +287,11 @@ def build_audio_graph(
                     kind=(
                         AudioSourceKind.ORIGINAL
                         if track_kind is TrackKind.VISUAL
-                        else AudioSourceKind.MUSIC
+                        else (
+                            AudioSourceKind.MUSIC
+                            if track_kind is TrackKind.MUSIC
+                            else AudioSourceKind.NARRATION
+                        )
                     ),
                     source_path=media.source_path,
                     stream_index=stream.index,
@@ -236,6 +302,18 @@ def build_audio_graph(
                     playback_rate=clip.playback_rate,
                     level=clip.audio_level,
                     muted=clip.audio_muted,
+                    bus_level={
+                        TrackKind.VISUAL: project.mixer.original,
+                        TrackKind.MUSIC: project.mixer.music,
+                        TrackKind.NARRATION: project.mixer.narration,
+                    }[track_kind],
+                    clip_start=clip.timeline_start,
+                    clip_duration=clip.duration,
+                    fade_in=clip.fade_in,
+                    fade_out=clip.fade_out,
+                    ducking_windows=(
+                        ducking_windows if track_kind is TrackKind.MUSIC else ()
+                    ),
                 )
             )
 
@@ -250,10 +328,11 @@ def build_audio_graph(
 def format_audio_time(value: ProjectTime) -> str:
     """Return an exact non-scientific second value with nanosecond precision."""
 
-    seconds, remainder = divmod(value.nanoseconds, 1_000_000_000)
+    sign = "-" if value.nanoseconds < 0 else ""
+    seconds, remainder = divmod(abs(value.nanoseconds), 1_000_000_000)
     if remainder == 0:
-        return str(seconds)
-    return f"{seconds}.{remainder:09d}".rstrip("0")
+        return f"{sign}{seconds}"
+    return f"{sign}{seconds}.{remainder:09d}".rstrip("0")
 
 
 def _format_fraction(value: Fraction) -> str:
@@ -265,6 +344,111 @@ def _format_fraction(value: Fraction) -> str:
 
 def _delay_samples(value: ProjectTime, sample_rate: int) -> int:
     return audio_frames_for_time(value, sample_rate)
+
+
+def _expression_call(name: str, *arguments: str) -> str:
+    return f"{name}({r'\,'.join(arguments)})"
+
+
+def _fade_expression(graph: AudioGraph, source: AudioSource) -> str:
+    overlap_start = graph.start + source.timeline_delay
+    offset = overlap_start - source.clip_start
+    factors: list[str] = []
+    if source.fade_in.nanoseconds > 0:
+        progress = (
+            f"(t+{format_audio_time(offset)})/"
+            f"{format_audio_time(source.fade_in)}"
+        )
+        factors.append(
+            _expression_call("max", "0", _expression_call("min", "1", progress))
+        )
+    if source.fade_out.nanoseconds > 0:
+        remaining = (
+            f"({format_audio_time(source.clip_duration)}-t-"
+            f"{format_audio_time(offset)})/{format_audio_time(source.fade_out)}"
+        )
+        factors.append(
+            _expression_call("max", "0", _expression_call("min", "1", remaining))
+        )
+    return "*".join(factors) or "1"
+
+
+_DUCKING_LEVEL = {
+    DuckingPreset.LIGHT: Fraction(65, 100),
+    DuckingPreset.MEDIUM: Fraction(40, 100),
+    DuckingPreset.STRONG: Fraction(20, 100),
+}
+
+
+def _ducking_window_expression(
+    graph: AudioGraph,
+    source: AudioSource,
+    window: DuckingWindow,
+) -> str:
+    source_start = graph.start + source.timeline_delay
+    attack_start = window.start - window.attack - source_start
+    attack_end = window.start - source_start
+    release_start = window.end - source_start
+    release_end = window.end + window.release - source_start
+    start = format_audio_time(attack_start)
+    onset = format_audio_time(attack_end)
+    end = format_audio_time(release_start)
+    released = format_audio_time(release_end)
+    gain = _format_fraction(_DUCKING_LEVEL[window.preset])
+    attack = f"1-(1-{gain})*(t-({start}))/{format_audio_time(window.attack)}"
+    release = f"{gain}+(1-{gain})*(t-({end}))/{format_audio_time(window.release)}"
+    return _expression_call(
+        "if",
+        rf"lt(t\,{start})",
+        "1",
+        _expression_call(
+            "if",
+            rf"lt(t\,{onset})",
+            attack,
+            _expression_call(
+                "if",
+                rf"lt(t\,{end})",
+                gain,
+                _expression_call("if", rf"lt(t\,{released})", release, "1"),
+            ),
+        ),
+    )
+
+
+def _source_volume_expression(graph: AudioGraph, source: AudioSource) -> str:
+    clip_gain = Fraction(0) if source.muted else source.level.fraction
+    bus_gain = source.bus_level.fraction
+    factors = [
+        _format_fraction(clip_gain),
+        _format_fraction(bus_gain),
+        _fade_expression(graph, source),
+    ]
+    ducking = [
+        _ducking_window_expression(graph, source, window)
+        for window in source.ducking_windows
+    ]
+    if ducking:
+        factors.append(
+            ducking[0]
+            if len(ducking) == 1
+            else _expression_call("min", *ducking)
+        )
+    return "*".join(factors)
+
+
+def _source_volume_filter(graph: AudioGraph, source: AudioSource) -> str:
+    gain = (
+        Fraction(0)
+        if source.muted
+        else source.level.fraction * source.bus_level.fraction
+    )
+    if (
+        source.fade_in == ZERO_AUDIO_TIME
+        and source.fade_out == ZERO_AUDIO_TIME
+        and not source.ducking_windows
+    ):
+        return f"volume={_format_fraction(gain)}"
+    return f"volume='{_source_volume_expression(graph, source)}':eval=frame"
 
 
 def ffmpeg_audio_filter(
@@ -303,7 +487,7 @@ def ffmpeg_audio_filter(
                     f"aformat=sample_fmts=s16:sample_rates={graph.sample_rate}:"
                     "channel_layouts=stereo"
                 ),
-                f"volume={0 if source.muted else _format_fraction(source.level.fraction)}",
+                _source_volume_filter(graph, source),
                 (
                     f"adelay=delays="
                     f"{_delay_samples(source.timeline_delay, graph.sample_rate)}S:all=1"

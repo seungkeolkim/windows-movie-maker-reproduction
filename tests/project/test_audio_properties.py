@@ -228,7 +228,7 @@ def test_photo_cannot_persist_audio_properties() -> None:
         )
 
 
-def test_narration_cannot_persist_w06_audio_properties() -> None:
+def test_narration_persists_w09_audio_properties() -> None:
     project = _project()
     narration = replace(
         project.clip("music-clip"),
@@ -237,13 +237,14 @@ def test_narration_cannot_persist_w06_audio_properties() -> None:
         audio_muted=True,
     )
 
-    with pytest.raises(ProjectValidationError, match="Narration clips"):
-        replace(
-            project,
-            tracks=(
-                project.track(TrackKind.VISUAL),
-                TimelineTrack(TrackKind.MUSIC),
-                TimelineTrack(TrackKind.NARRATION, (narration,)),
-                project.track(TrackKind.TEXT),
-            ),
-        )
+    updated = replace(
+        project,
+        tracks=(
+            project.track(TrackKind.VISUAL),
+            TimelineTrack(TrackKind.MUSIC),
+            TimelineTrack(TrackKind.NARRATION, (narration,)),
+            project.track(TrackKind.TEXT),
+        ),
+    )
+
+    assert updated.clip("narration-clip").audio_muted

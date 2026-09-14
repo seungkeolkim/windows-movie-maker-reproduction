@@ -210,8 +210,8 @@ class MainWindow(QMainWindow):
         self._timeline_lists: dict[TrackKind, _TimelineListWidget] = {}
         self._preview_bridge = PreviewBridge(preview_coordinator, self)
         self._preview_png: bytes | None = None
-        self._preview_frame_key: tuple[str, str, str, int, int] | None = None
-        self._preview_error_key: tuple[str, str, str, int, int] | None = None
+        self._preview_frame_key: tuple[object, ...] | None = None
+        self._preview_error_key: tuple[object, ...] | None = None
         self._preview_error_text: str | None = None
         self._preview_project: Project | None = None
         self._audio_bridge = AudioPreviewBridge(audio_coordinator, self)
@@ -700,7 +700,26 @@ class MainWindow(QMainWindow):
         self.canvas_combo.addItems(["원본 유지", "16:9", "4:3 · 1.0"])
         self.canvas_combo.currentTextChanged.connect(self._apply_canvas_mode)
         form.addRow("프로젝트 화면", self.canvas_combo)
+        self.original_bus_volume = QSpinBox()
+        self.original_bus_volume.setObjectName("E-MIXER-ORIGINAL")
+        self.original_bus_volume.setRange(0, 100)
+        self.original_bus_volume.setSuffix("%")
+        form.addRow("원본 소리", self.original_bus_volume)
+        self.music_bus_volume = QSpinBox()
+        self.music_bus_volume.setObjectName("E-MIXER-MUSIC")
+        self.music_bus_volume.setRange(0, 100)
+        self.music_bus_volume.setSuffix("%")
+        form.addRow("음악", self.music_bus_volume)
+        self.narration_bus_volume = QSpinBox()
+        self.narration_bus_volume.setObjectName("E-MIXER-NARRATION")
+        self.narration_bus_volume.setRange(0, 100)
+        self.narration_bus_volume.setSuffix("%")
+        form.addRow("내레이션", self.narration_bus_volume)
         layout.addLayout(form)
+        mixer_apply = QPushButton("전체 오디오 믹서 적용")
+        mixer_apply.setObjectName("E-MIXER-APPLY")
+        mixer_apply.clicked.connect(self._apply_mixer)
+        layout.addWidget(mixer_apply)
         self.project_summary = QLabel()
         self.project_summary.setObjectName("E-PROJECT-SUMMARY")
         self.project_summary.setWordWrap(True)
@@ -786,8 +805,13 @@ class MainWindow(QMainWindow):
         form.addRow("화면 배치 · 1.0", self.clip_fit)
         self.clip_effect = QComboBox()
         self.clip_effect.setObjectName("E-CLIP-EFFECT")
-        self.clip_effect.addItems(["없음", "따뜻하게", "흑백", "밝게"])
+        self.clip_effect.addItems(["없음", "따뜻하게", "흑백", "선명하게"])
         form.addRow("효과 · 1.0", self.clip_effect)
+        self.clip_brightness = QSpinBox()
+        self.clip_brightness.setObjectName("E-CLIP-BRIGHTNESS")
+        self.clip_brightness.setRange(-100, 100)
+        self.clip_brightness.setSuffix("%")
+        form.addRow("밝기 · 1.0", self.clip_brightness)
         layout.addLayout(form)
         trim_row = QHBoxLayout()
         trim_start = QPushButton("시작 +0.5초")
@@ -818,10 +842,7 @@ class MainWindow(QMainWindow):
         apply_button.setProperty("primary", True)
         apply_button.clicked.connect(self._apply_clip_properties)
         layout.addWidget(apply_button)
-        note = QLabel(
-            "트리밍·속도와 영상 원본음은 실제 프로젝트에 적용됩니다. "
-            "화면 배치와 효과는 1.0 목업입니다."
-        )
+        note = QLabel("모든 값은 미리 보기와 MP4 출력의 공통 합성 계획에 적용됩니다.")
         note.setObjectName("secondaryText")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -878,7 +899,7 @@ class MainWindow(QMainWindow):
         apply_button.setProperty("primary", True)
         apply_button.clicked.connect(self._apply_audio_properties)
         layout.addWidget(apply_button)
-        waveform = QLabel("▂▅▃▇▆▂▃▅▇▃▂▆▅▂ · 목업 파형 · 1.0")
+        waveform = QLabel("파형 없음 · 오디오 편집은 파형 없이 동작합니다 · 생성은 W-10 범위")
         waveform.setObjectName("E-AUDIO-WAVEFORM")
         waveform.setProperty("role", "summary")
         waveform.setWordWrap(True)
@@ -1678,7 +1699,7 @@ class MainWindow(QMainWindow):
     def _active_text_overlay(self, position_ms: int) -> str:
         for clip in self.controller.state.text_clips:
             if clip.start_ms <= position_ms < clip.start_ms + clip.duration_ms:
-                return clip.text_content.strip() or "텍스트를 입력하세요"
+                return clip.text_content.strip()
         return ""
 
     def _refresh_inspector(self) -> None:
@@ -1803,6 +1824,13 @@ class MainWindow(QMainWindow):
             self.audio_fade_in.setCurrentText(self._duration_choice(clip.fade_in_ms))
             self.audio_fade_out.setCurrentText(self._duration_choice(clip.fade_out_ms))
             self.audio_ducking.setCurrentText(clip.ducking)
+            narration_selected = clip.track is TrackKind.NARRATION
+            self.audio_ducking.setEnabled(narration_selected)
+            self.audio_ducking.setToolTip(
+                "내레이션이 재생되는 동안 음악을 낮추는 강도"
+                if narration_selected
+                else "더킹 강도는 내레이션 클립에서 설정합니다"
+            )
             del blockers
             return
         if clip is not None:
@@ -1829,6 +1857,7 @@ class MainWindow(QMainWindow):
                 QSignalBlocker(self.clip_mute),
                 QSignalBlocker(self.clip_fit),
                 QSignalBlocker(self.clip_effect),
+                QSignalBlocker(self.clip_brightness),
             ]
             self.clip_in.setValue(clip.source_in_ms / 1_000)
             source_out = clip.source_out_ms or clip.source_in_ms + clip.duration_ms
@@ -1839,6 +1868,7 @@ class MainWindow(QMainWindow):
             self.clip_mute.setChecked(clip.muted)
             self.clip_fit.setCurrentText(clip.fit_mode)
             self.clip_effect.setCurrentText(clip.effect)
+            self.clip_brightness.setValue(clip.brightness)
             is_visual = clip.track is TrackKind.VISUAL
             is_photo = asset_kind is not None and asset_kind.kind is MediaKind.PHOTO
             is_video = asset_kind is not None and asset_kind.kind is MediaKind.VIDEO
@@ -1849,6 +1879,7 @@ class MainWindow(QMainWindow):
             self.clip_mute.setEnabled(is_video)
             self.clip_fit.setEnabled(is_visual)
             self.clip_effect.setEnabled(is_visual)
+            self.clip_brightness.setEnabled(is_visual)
             del blockers
             return
         self._showing_transition = False
@@ -1861,6 +1892,15 @@ class MainWindow(QMainWindow):
         display_canvas = "4:3 · 1.0" if state.canvas_mode == "4:3" else state.canvas_mode
         self.canvas_combo.setCurrentText(display_canvas)
         del canvas_blocker
+        mixer_blockers = [
+            QSignalBlocker(self.original_bus_volume),
+            QSignalBlocker(self.music_bus_volume),
+            QSignalBlocker(self.narration_bus_volume),
+        ]
+        self.original_bus_volume.setValue(state.original_bus_volume)
+        self.music_bus_volume.setValue(state.music_bus_volume)
+        self.narration_bus_volume.setValue(state.narration_bus_volume)
+        del mixer_blockers
         size = (
             f"{state.canvas_width}×{state.canvas_height}"
             if state.canvas_width is not None and state.canvas_height is not None
@@ -2115,6 +2155,14 @@ class MainWindow(QMainWindow):
         if not self.controller.set_canvas_mode(mode):
             self.refresh()
 
+    def _apply_mixer(self) -> None:
+        if not self.controller.update_mixer(
+            original=self.original_bus_volume.value(),
+            music=self.music_bus_volume.value(),
+            narration=self.narration_bus_volume.value(),
+        ):
+            self.refresh()
+
     def _apply_clip_properties(self) -> None:
         speed_text = self.clip_speed.currentText().replace("×", "")
         speed = float(speed_text)
@@ -2125,6 +2173,7 @@ class MainWindow(QMainWindow):
             muted=self.clip_mute.isChecked(),
             fit_mode=self.clip_fit.currentText(),
             effect=self.clip_effect.currentText(),
+            brightness=self.clip_brightness.value(),
             source_in_ms=round(self.clip_in.value() * 1_000),
             source_out_ms=round(self.clip_out.value() * 1_000),
         )

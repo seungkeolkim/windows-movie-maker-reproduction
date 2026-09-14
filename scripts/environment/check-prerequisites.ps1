@@ -146,7 +146,14 @@ $requiredFilters = @(
     "anullsrc",
     "xfade",
     "acrossfade",
-    "drawtext"
+    "drawtext",
+    "tpad",
+    "transpose",
+    "hflip",
+    "vflip",
+    "eq",
+    "colorbalance",
+    "hue"
 )
 $missingFilters = @(
     foreach ($filter in $requiredFilters) {

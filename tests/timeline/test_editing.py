@@ -150,6 +150,19 @@ def test_add_command_undo_restores_empty_timeline_and_canvas() -> None:
     assert edited.canvas.reference_asset_id == "video"
 
 
+def test_first_visual_canvas_uses_display_rotation_metadata() -> None:
+    video = _video()
+    rotated = replace(
+        video,
+        streams=(replace(video.streams[0], rotation_degrees=90),),
+    )
+    executor = CommandExecutor(_project(rotated))
+
+    edited = _execute_round_trip(executor, AddMediaClip("video", "clip-video"))
+
+    assert (edited.canvas.width, edited.canvas.height) == (1080, 1920)
+
+
 def test_visual_move_and_delete_keep_ids_references_and_auxiliary_absolute_time() -> None:
     executor = CommandExecutor(_project(_video("one", duration_seconds=4), _video("two", duration_seconds=6), _photo(), _audio()))
     executor.execute(AddMediaClip("one", "clip-one"))

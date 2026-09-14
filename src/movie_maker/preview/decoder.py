@@ -7,12 +7,20 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from fractions import Fraction
 from pathlib import Path
 from threading import Event
 from typing import Protocol
 
+from movie_maker.audio import format_audio_time
+from movie_maker.creative.composition import (
+    CompositionError,
+    build_composition_plan,
+    composition_video_filter,
+)
 from movie_maker.media.process import resolve_media_tool
 from movie_maker.preview.timeline import FrameTarget
+from movie_maker.project import MediaKind, ProjectTime
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -23,6 +31,7 @@ class PreviewDecodeErrorCode(str, Enum):
     TIMEOUT = "timeout"
     PROCESS_FAILED = "process_failed"
     INVALID_FRAME = "invalid_frame"
+    INVALID_COMPOSITION = "invalid_composition"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -89,6 +98,8 @@ def format_ffmpeg_timestamp(target: FrameTarget) -> str:
 def ffmpeg_frame_arguments(executable: str, target: FrameTarget) -> tuple[str, ...]:
     """Build the shell-free one-frame decoding argv."""
 
+    if target.project is not None and target.project_position is not None:
+        return ffmpeg_composition_frame_arguments(executable, target)
     return (
         executable,
         "-v",
@@ -111,6 +122,69 @@ def ffmpeg_frame_arguments(executable: str, target: FrameTarget) -> tuple[str, .
         "png",
         "pipe:1",
     )
+
+
+def ffmpeg_composition_frame_arguments(
+    executable: str,
+    target: FrameTarget,
+) -> tuple[str, ...]:
+    """Build a one-frame argv from the same composition plan as export."""
+
+    project = target.project
+    position = target.project_position
+    if project is None or position is None:
+        raise CompositionError("A composition preview requires a project and position.")
+    width = project.canvas.width
+    height = project.canvas.height
+    if width is None or height is None:
+        media = project.media_reference(target.asset_id)
+        width, height = media.width, media.height
+    if width is None or height is None:
+        raise CompositionError("미리 보기 화면 크기를 결정할 수 없습니다.")
+    plan = build_composition_plan(project, width=width, height=height)
+    frame_duration = ProjectTime.from_seconds(
+        Fraction(plan.frame_rate.denominator, plan.frame_rate.numerator)
+    )
+    render_position = min(position, max(ProjectTime.zero(), plan.duration - frame_duration))
+    arguments: list[str] = [executable, "-v", "error", "-nostdin"]
+    for source in plan.sources:
+        if source.media_kind is MediaKind.PHOTO:
+            arguments.extend(
+                (
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    f"{plan.frame_rate.numerator}/{plan.frame_rate.denominator}",
+                    "-t",
+                    format_audio_time(source.duration),
+                )
+            )
+        arguments.extend(("-i", source.source_path))
+    base = composition_video_filter(plan, output_label="composition")
+    frame_filter = (
+        f"[composition]trim=start={format_audio_time(render_position)}:"
+        f"duration={format_audio_time(frame_duration)},"
+        "setpts=PTS-STARTPTS[vout]"
+    )
+    arguments.extend(
+        (
+            "-filter_complex",
+            f"{base};{frame_filter}",
+            "-map",
+            "[vout]",
+            "-frames:v",
+            "1",
+            "-an",
+            "-sn",
+            "-dn",
+            "-f",
+            "image2pipe",
+            "-c:v",
+            "png",
+            "pipe:1",
+        )
+    )
+    return tuple(arguments)
 
 
 def _detail(stderr: bytes) -> str | None:
@@ -144,17 +218,35 @@ class FfmpegFrameDecoder:
         self._monotonic = monotonic
 
     def decode(self, target: FrameTarget, cancelled: Event) -> PreviewDecodeResult:
-        source = Path(target.source_path)
-        if not source.is_file():
+        source_paths = [target.source_path]
+        if target.project is not None:
+            source_paths = [
+                media.source_path
+                for media in target.project.media
+                if media.kind in {MediaKind.VIDEO, MediaKind.PHOTO}
+            ]
+        missing_source = next(
+            (source_path for source_path in source_paths if not Path(source_path).is_file()),
+            None,
+        )
+        if missing_source is not None:
             return PreviewDecodeFailure(
                 target,
                 PreviewDecodeErrorCode.SOURCE_NOT_FOUND,
-                "원본 파일을 찾을 수 없습니다. 누락 미디어에서 다시 연결하세요.",
+                "원본 파일을 찾을 수 없습니다. 누락 미디어에서 다시 연결하세요. "
+                f"({missing_source})",
             )
         if cancelled.is_set():
             return PreviewDecodeCancelled(target)
 
-        arguments = ffmpeg_frame_arguments(self._executable, target)
+        try:
+            arguments = ffmpeg_frame_arguments(self._executable, target)
+        except CompositionError as error:
+            return PreviewDecodeFailure(
+                target,
+                PreviewDecodeErrorCode.INVALID_COMPOSITION,
+                str(error),
+            )
         try:
             process = self._launcher(arguments)
         except FileNotFoundError as error:

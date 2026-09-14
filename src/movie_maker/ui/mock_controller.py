@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import wave
 from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from itertools import count
 from pathlib import Path
@@ -13,6 +15,14 @@ from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal
 
+from movie_maker.creative import (
+    AddRecordedNarration,
+    AddTextClip,
+    UpdateMixerSettings,
+    UpdateTextProperties,
+    UpdateTransition,
+    UpdateVisualProperties,
+)
 from movie_maker.media import (
     ImportedMedia,
     MediaImportReport,
@@ -22,10 +32,18 @@ from movie_maker.media import (
 from movie_maker.preview import PlaybackClock, ui_milliseconds
 from movie_maker.project import (
     AudioLevel,
+    Brightness,
     Canvas,
     Clip,
     CommandError,
+    DuckingPreset,
+    FitMode,
     MediaReference,
+    MediaStream,
+    MediaStreamKind,
+    MediaTimeBase,
+    MixerSettings,
+    NormalizedPosition,
     PlaybackRate,
     Project,
     ProjectCommand,
@@ -33,7 +51,16 @@ from movie_maker.project import (
     ProjectPersistenceError,
     ProjectTime,
     RenameProject,
+    TextAlignment,
+    TextAnimationPreset,
+    TextKind,
+    TextOverlay,
+    TextStyle,
     TimelineTrack,
+    Transition,
+    TransitionPreset,
+    UserRotation,
+    VisualEffectPreset,
 )
 from movie_maker.project.model import MediaKind as CoreMediaKind
 from movie_maker.project.model import TrackKind as CoreTrackKind
@@ -80,6 +107,57 @@ CORE_TO_UI_TRACK_KIND = {
     CoreTrackKind.TEXT: TrackKind.TEXT,
 }
 UI_TO_CORE_TRACK_KIND = {value: key for key, value in CORE_TO_UI_TRACK_KIND.items()}
+FIT_TO_CORE = {"맞춤": FitMode.FIT, "채움": FitMode.FILL}
+CORE_TO_FIT = {value: key for key, value in FIT_TO_CORE.items()}
+EFFECT_TO_CORE = {
+    "없음": VisualEffectPreset.NONE,
+    "따뜻하게": VisualEffectPreset.WARM,
+    "흑백": VisualEffectPreset.MONOCHROME,
+    "선명하게": VisualEffectPreset.VIVID,
+    "밝게": VisualEffectPreset.VIVID,
+}
+CORE_TO_EFFECT = {
+    VisualEffectPreset.NONE: "없음",
+    VisualEffectPreset.WARM: "따뜻하게",
+    VisualEffectPreset.MONOCHROME: "흑백",
+    VisualEffectPreset.VIVID: "선명하게",
+}
+DUCKING_TO_CORE = {
+    "꺼짐": DuckingPreset.OFF,
+    "약하게": DuckingPreset.LIGHT,
+    "보통": DuckingPreset.MEDIUM,
+    "강하게": DuckingPreset.STRONG,
+}
+CORE_TO_DUCKING = {value: key for key, value in DUCKING_TO_CORE.items()}
+TEXT_KIND_TO_CORE = {
+    "제목": TextKind.TITLE,
+    "캡션": TextKind.CAPTION,
+    "크레딧": TextKind.CREDITS,
+}
+CORE_TO_TEXT_KIND = {value: key for key, value in TEXT_KIND_TO_CORE.items()}
+ALIGNMENT_TO_CORE = {
+    "왼쪽": TextAlignment.LEFT,
+    "가운데": TextAlignment.CENTER,
+    "오른쪽": TextAlignment.RIGHT,
+}
+CORE_TO_ALIGNMENT = {value: key for key, value in ALIGNMENT_TO_CORE.items()}
+ANIMATION_TO_CORE = {
+    "없음": TextAnimationPreset.NONE,
+    "페이드": TextAnimationPreset.FADE,
+    "위로 흐르기": TextAnimationPreset.SCROLL_UP,
+}
+CORE_TO_ANIMATION = {value: key for key, value in ANIMATION_TO_CORE.items()}
+POSITION_Y = {"위": 1_500, "가운데": 5_000, "아래": 8_500}
+COLOR_TO_HEX = {"흰색": "#FFFFFF", "검정": "#000000", "노랑": "#FFFF00", "하늘색": "#66CCFF"}
+HEX_TO_COLOR = {value: key for key, value in COLOR_TO_HEX.items()}
+FONT_TO_CORE = {"맑은 고딕": "Malgun Gothic", "굴림": "Gulim", "바탕": "Batang"}
+CORE_TO_FONT = {value: key for key, value in FONT_TO_CORE.items()}
+TRANSITION_TO_CORE = {
+    "페이드": TransitionPreset.FADE,
+    "디졸브": TransitionPreset.DISSOLVE,
+    "닦아내기": TransitionPreset.WIPE_LEFT,
+}
+CORE_TO_TRANSITION = {value: key for key, value in TRANSITION_TO_CORE.items()}
 
 
 @dataclass(slots=True)
@@ -165,6 +243,70 @@ def _import_warning_text(report: MediaImportReport) -> str | None:
             f"{_source_name(thumbnail_failure.source_path)}: {thumbnail_failure.message}"
         )
     return "\n".join(lines) or None
+
+
+def _text_overlay_from_mock(clip: MockClip) -> TextOverlay:
+    kind = TEXT_KIND_TO_CORE.get(clip.text_kind or "캡션", TextKind.CAPTION)
+    return TextOverlay(
+        kind=kind,
+        content=clip.text_content,
+        style=TextStyle(
+            font_family=FONT_TO_CORE.get(clip.text_font, "Malgun Gothic"),
+            size=clip.text_size,
+            bold=clip.text_bold,
+            color=COLOR_TO_HEX.get(clip.text_color, "#FFFFFF"),
+            outline_color="#000000" if clip.text_color != "검정" else "#FFFFFF",
+            alignment=ALIGNMENT_TO_CORE.get(
+                clip.text_alignment, TextAlignment.CENTER
+            ),
+        ),
+        position=NormalizedPosition(5_000, POSITION_Y.get(clip.text_position, 8_500)),
+        animation=ANIMATION_TO_CORE.get(
+            clip.text_animation, TextAnimationPreset.NONE
+        ),
+    )
+
+
+def _transition_from_mock(boundary: str, value: str) -> Transition | None:
+    parts = boundary.split("|", maxsplit=1)
+    if len(parts) != 2:
+        return None
+    name, _, duration_text = value.partition(" · ")
+    preset = TRANSITION_TO_CORE.get(name)
+    if preset is None:
+        return None
+    try:
+        seconds = Decimal(duration_text.removesuffix("초"))
+    except InvalidOperation:
+        return None
+    return Transition(parts[0], parts[1], preset, ProjectTime.from_seconds(seconds))
+
+
+def _position_name(y: int) -> str:
+    return min(POSITION_Y, key=lambda name: abs(POSITION_Y[name] - y))
+
+
+def _sync_creative_values(projected: MockClip, clip: Clip) -> None:
+    projected.fade_in_ms = clip.fade_in.to_milliseconds()
+    projected.fade_out_ms = clip.fade_out.to_milliseconds()
+    projected.ducking = CORE_TO_DUCKING[clip.ducking]
+    projected.fit_mode = CORE_TO_FIT[clip.fit_mode]
+    projected.rotation = int(clip.user_rotation)
+    projected.brightness = clip.brightness.percent
+    projected.effect = CORE_TO_EFFECT[clip.effect_preset]
+    if clip.text is None:
+        return
+    projected.text_kind = CORE_TO_TEXT_KIND[clip.text.kind]
+    projected.text_content = clip.text.content
+    projected.text_font = CORE_TO_FONT.get(
+        clip.text.style.font_family, clip.text.style.font_family
+    )
+    projected.text_size = clip.text.style.size
+    projected.text_bold = clip.text.style.bold
+    projected.text_color = HEX_TO_COLOR.get(clip.text.style.color, "흰색")
+    projected.text_alignment = CORE_TO_ALIGNMENT[clip.text.style.alignment]
+    projected.text_position = _position_name(clip.text.position.y)
+    projected.text_animation = CORE_TO_ANIMATION[clip.text.animation]
 
 
 class MockController(QObject):
@@ -442,16 +584,65 @@ class MockController(QObject):
                     playback_rate=PlaybackRate(rate.numerator, rate.denominator),
                     audio_level=(
                         AudioLevel(mock_clip.volume)
-                        if core_track in {CoreTrackKind.VISUAL, CoreTrackKind.MUSIC}
+                        if core_track
+                        in {
+                            CoreTrackKind.VISUAL,
+                            CoreTrackKind.MUSIC,
+                            CoreTrackKind.NARRATION,
+                        }
                         else AudioLevel()
                     ),
                     audio_muted=(
                         mock_clip.muted
-                        if core_track in {CoreTrackKind.VISUAL, CoreTrackKind.MUSIC}
+                        if core_track
+                        in {
+                            CoreTrackKind.VISUAL,
+                            CoreTrackKind.MUSIC,
+                            CoreTrackKind.NARRATION,
+                        }
                         else False
+                    ),
+                    fade_in=ProjectTime.from_milliseconds(mock_clip.fade_in_ms),
+                    fade_out=ProjectTime.from_milliseconds(mock_clip.fade_out_ms),
+                    ducking=(
+                        DUCKING_TO_CORE.get(mock_clip.ducking, DuckingPreset.OFF)
+                        if core_track is CoreTrackKind.NARRATION
+                        else DuckingPreset.OFF
+                    ),
+                    fit_mode=(
+                        FIT_TO_CORE.get(mock_clip.fit_mode, FitMode.FIT)
+                        if core_track is CoreTrackKind.VISUAL
+                        else FitMode.FIT
+                    ),
+                    user_rotation=(
+                        UserRotation(mock_clip.rotation)
+                        if core_track is CoreTrackKind.VISUAL
+                        else UserRotation.NONE
+                    ),
+                    brightness=(
+                        Brightness(mock_clip.brightness)
+                        if core_track is CoreTrackKind.VISUAL
+                        else Brightness()
+                    ),
+                    effect_preset=(
+                        EFFECT_TO_CORE.get(
+                            mock_clip.effect, VisualEffectPreset.NONE
+                        )
+                        if core_track is CoreTrackKind.VISUAL
+                        else VisualEffectPreset.NONE
+                    ),
+                    text=(
+                        _text_overlay_from_mock(mock_clip)
+                        if core_track is CoreTrackKind.TEXT
+                        else None
                     ),
                 )
             )
+        transitions = tuple(
+            transition
+            for boundary, value in self.state.transitions.items()
+            if (transition := _transition_from_mock(boundary, value)) is not None
+        )
         return Project(
             schema_version=base_project.schema_version,
             project_id=base_project.project_id,
@@ -462,10 +653,16 @@ class MockController(QObject):
                 self.state.reference_asset_id,
             ),
             media=tuple(media),
-            tracks=tuple(
-                TimelineTrack(kind, tuple(clips_by_track[kind])) for kind in CoreTrackKind
-            ),
-        )
+              tracks=tuple(
+                  TimelineTrack(kind, tuple(clips_by_track[kind])) for kind in CoreTrackKind
+              ),
+              mixer=MixerSettings(
+                  original=AudioLevel(self.state.original_bus_volume),
+                  music=AudioLevel(self.state.music_bus_volume),
+                  narration=AudioLevel(self.state.narration_bus_volume),
+              ),
+              transitions=transitions,
+          )
 
     @staticmethod
     def _mock_matches_exact_clip(mock_clip: MockClip, exact_clip: Clip) -> bool:
@@ -483,12 +680,18 @@ class MockController(QObject):
                 else None
             )
             and mock_clip.speed == float(exact_clip.playback_rate.fraction)
+            and mock_clip.volume == exact_clip.audio_level.percent
+            and mock_clip.muted is exact_clip.audio_muted
+            and mock_clip.fade_in_ms == exact_clip.fade_in.to_milliseconds()
+            and mock_clip.fade_out_ms == exact_clip.fade_out.to_milliseconds()
+            and mock_clip.ducking == CORE_TO_DUCKING[exact_clip.ducking]
+            and mock_clip.fit_mode == CORE_TO_FIT[exact_clip.fit_mode]
+            and mock_clip.rotation == int(exact_clip.user_rotation)
+            and mock_clip.brightness == exact_clip.brightness.percent
+            and mock_clip.effect == CORE_TO_EFFECT[exact_clip.effect_preset]
             and (
-                exact_clip.track is CoreTrackKind.NARRATION
-                or (
-                    mock_clip.volume == exact_clip.audio_level.percent
-                    and mock_clip.muted is exact_clip.audio_muted
-                )
+                exact_clip.text is None
+                or _text_overlay_from_mock(mock_clip) == exact_clip.text
             )
         )
 
@@ -520,6 +723,9 @@ class MockController(QObject):
             canvas_width=project.canvas.width,
             canvas_height=project.canvas.height,
             reference_asset_id=project.canvas.reference_asset_id,
+            original_bus_volume=project.mixer.original.percent,
+            music_bus_volume=project.mixer.music.percent,
+            narration_bus_volume=project.mixer.narration.percent,
             status_message="프로젝트를 열었습니다",
         )
         target_lists = {
@@ -530,25 +736,32 @@ class MockController(QObject):
         }
         for track in project.tracks:
             for clip in track.clips:
-                target_lists[CORE_TO_UI_TRACK_KIND[track.kind]].append(
-                    MockClip(
-                        clip_id=clip.clip_id,
-                        track=CORE_TO_UI_TRACK_KIND[track.kind],
-                        asset_id=clip.asset_id,
-                        label=clip.label,
-                        start_ms=clip.timeline_start.to_milliseconds(),
-                        duration_ms=clip.duration.to_milliseconds(),
-                        source_in_ms=clip.source_in.to_milliseconds(),
-                        source_out_ms=(
-                            clip.source_out.to_milliseconds()
-                            if clip.source_out is not None
-                            else None
-                        ),
-                        speed=float(clip.playback_rate.fraction),
-                        volume=clip.audio_level.percent,
-                        muted=clip.audio_muted,
-                    )
+                projected = MockClip(
+                    clip_id=clip.clip_id,
+                    track=CORE_TO_UI_TRACK_KIND[track.kind],
+                    asset_id=clip.asset_id,
+                    label=clip.label,
+                    start_ms=clip.timeline_start.to_milliseconds(),
+                    duration_ms=clip.duration.to_milliseconds(),
+                    source_in_ms=clip.source_in.to_milliseconds(),
+                    source_out_ms=(
+                        clip.source_out.to_milliseconds()
+                        if clip.source_out is not None
+                        else None
+                    ),
+                    speed=float(clip.playback_rate.fraction),
+                    volume=clip.audio_level.percent,
+                    muted=clip.audio_muted,
                 )
+                _sync_creative_values(projected, clip)
+                target_lists[CORE_TO_UI_TRACK_KIND[track.kind]].append(projected)
+        state.transitions = {
+            f"{transition.left_clip_id}|{transition.right_clip_id}": (
+                f"{CORE_TO_TRANSITION[transition.preset]} · "
+                f"{float(transition.duration.to_fractional_seconds()):g}초"
+            )
+            for transition in project.transitions
+        }
         missing_count = sum(asset.status is AssetStatus.MISSING for asset in assets.values())
         if missing_count:
             state.status_message = f"프로젝트를 열었습니다 · 누락 미디어 {missing_count}개"
@@ -624,6 +837,7 @@ class MockController(QObject):
                 projected.speed = float(clip.playback_rate.fraction)
                 projected.volume = clip.audio_level.percent
                 projected.muted = clip.audio_muted
+                _sync_creative_values(projected, clip)
                 target_lists[ui_track].append(projected)
 
         self.state.visual_clips = target_lists[TrackKind.VISUAL]
@@ -634,6 +848,9 @@ class MockController(QObject):
         self.state.canvas_width = project.canvas.width
         self.state.canvas_height = project.canvas.height
         self.state.reference_asset_id = project.canvas.reference_asset_id
+        self.state.original_bus_volume = project.mixer.original.percent
+        self.state.music_bus_volume = project.mixer.music.percent
+        self.state.narration_bus_volume = project.mixer.narration.percent
 
         selection = TimelineSelection(
             tuple(self.state.selected_clip_ids),
@@ -647,11 +864,12 @@ class MockController(QObject):
             ui_milliseconds(project.duration),
         )
         self.state.is_playing = self._playback.is_playing
-        visual_ids = {clip.clip_id for clip in self.state.visual_clips}
         self.state.transitions = {
-            boundary: value
-            for boundary, value in self.state.transitions.items()
-            if all(clip_id in visual_ids for clip_id in boundary.split("|"))
+            f"{transition.left_clip_id}|{transition.right_clip_id}": (
+                f"{CORE_TO_TRANSITION[transition.preset]} · "
+                f"{float(transition.duration.to_fractional_seconds()):g}초"
+            )
+            for transition in project.transitions
         }
 
     def import_sample_media(self) -> None:
@@ -1016,6 +1234,27 @@ class MockController(QObject):
     def asset_usage_count(self, asset_id: str) -> int:
         return sum(clip.asset_id == asset_id for clip in self.state.all_clips)
 
+    def update_mixer(self, *, original: int, music: int, narration: int) -> bool:
+        """Commit all three project buses together so undo never exposes a partial mix."""
+
+        try:
+            settings = MixerSettings(
+                original=AudioLevel(original),
+                music=AudioLevel(music),
+                narration=AudioLevel(narration),
+            )
+        except (TypeError, ValueError) as error:
+            self._set_status(f"전체 오디오 믹서를 적용할 수 없습니다 · {error}")
+            return False
+        result = self._execute_core(
+            UpdateMixerSettings(settings),
+            "전체 오디오 믹서를 적용했습니다",
+        )
+        if result is None:
+            return False
+        self._publish()
+        return True
+
     def remove_selected_asset(self) -> bool:
         asset = self.selected_asset
         if asset is None:
@@ -1349,6 +1588,7 @@ class MockController(QObject):
         muted: bool,
         fit_mode: str | None = None,
         effect: str | None = None,
+        brightness: int | None = None,
         source_in_ms: int | None = None,
         source_out_ms: int | None = None,
     ) -> bool:
@@ -1364,6 +1604,15 @@ class MockController(QObject):
             return False
         if speed not in {0.5, 1.0, 1.5, 2.0}:
             self._set_status("지원하는 속도는 0.5×, 1×, 1.5×, 2×입니다")
+            return False
+        if fit_mode is not None and fit_mode not in FIT_TO_CORE:
+            self._set_status("지원하지 않는 화면 배치 프리셋입니다")
+            return False
+        if effect is not None and effect not in EFFECT_TO_CORE:
+            self._set_status("지원하지 않는 시각 효과 프리셋입니다")
+            return False
+        if brightness is not None and not -100 <= brightness <= 100:
+            self._set_status("밝기는 -100~100 범위여야 합니다")
             return False
 
         asset = self.asset_for_clip(clip)
@@ -1386,6 +1635,13 @@ class MockController(QObject):
             command = UpdateClipTiming(
                 clip.clip_id,
                 photo_duration=ProjectTime.from_milliseconds(duration_ms),
+                fit_mode=(
+                    FIT_TO_CORE.get(fit_mode) if fit_mode is not None else None
+                ),
+                brightness=Brightness(brightness) if brightness is not None else None,
+                effect_preset=(
+                    EFFECT_TO_CORE.get(effect) if effect is not None else None
+                ),
             )
         else:
             rate = Fraction(str(speed))
@@ -1400,18 +1656,15 @@ class MockController(QObject):
                 ),
                 audio_level=AudioLevel(volume) if is_video else None,
                 audio_muted=muted if is_video else None,
+                fit_mode=(
+                    FIT_TO_CORE.get(fit_mode) if fit_mode is not None else None
+                ),
+                brightness=Brightness(brightness) if brightness is not None else None,
+                effect_preset=(
+                    EFFECT_TO_CORE.get(effect) if effect is not None else None
+                ),
             )
-        if self._execute_core(command, "클립 속성을 적용했습니다") is None:
-            return False
-        updated = self.selected_clip
-        if updated is None:
-            return False
-        if fit_mode is not None and updated.track is TrackKind.VISUAL:
-            updated.fit_mode = fit_mode
-        if effect is not None and updated.track is TrackKind.VISUAL:
-            updated.effect = effect
-        self._publish()
-        return True
+        return self._execute_core(command, "클립 속성을 적용했습니다") is not None
 
     def update_selected_audio(
         self,
@@ -1450,37 +1703,44 @@ class MockController(QObject):
         if fade_in_ms + fade_out_ms > duration_ms:
             self._set_status("페이드 합계가 오디오 클립 길이보다 길 수 없습니다")
             return False
+        if ducking not in DUCKING_TO_CORE:
+            self._set_status("지원하지 않는 더킹 프리셋입니다")
+            return False
+        if clip.track is TrackKind.MUSIC and ducking != "꺼짐":
+            self._set_status("더킹 강도는 내레이션 클립에서 설정하세요")
+            return False
 
         command = UpdateClipTiming(
             clip.clip_id,
             source_in=ProjectTime.from_milliseconds(source_in_ms),
             source_out=ProjectTime.from_milliseconds(source_out_ms),
             timeline_start=ProjectTime.from_milliseconds(start_ms),
-            audio_level=(AudioLevel(volume) if clip.track is TrackKind.MUSIC else None),
-            audio_muted=(muted if clip.track is TrackKind.MUSIC else None),
+            audio_level=AudioLevel(volume),
+            audio_muted=muted,
+            fade_in=ProjectTime.from_milliseconds(fade_in_ms),
+            fade_out=ProjectTime.from_milliseconds(fade_out_ms),
+            ducking=(
+                DUCKING_TO_CORE[ducking]
+                if clip.track is TrackKind.NARRATION
+                else DuckingPreset.OFF
+            ),
             history_label="오디오 속성 적용",
         )
-        if self._execute_core(command, "오디오 타이밍 속성을 적용했습니다") is None:
-            return False
-        updated = self.selected_clip
-        if updated is None:
-            return False
-        if clip.track is TrackKind.NARRATION:
-            updated.volume = volume
-            updated.muted = muted
-        updated.fade_in_ms = fade_in_ms
-        updated.fade_out_ms = fade_out_ms
-        updated.ducking = ducking
-        self._publish()
-        return True
+        return self._execute_core(command, "오디오 타이밍 속성을 적용했습니다") is not None
 
     def set_clip_fit(self, fit_mode: str) -> bool:
         clip = self.selected_clip
         if len(self.selected_clips) != 1 or clip is None or clip.track is not TrackKind.VISUAL:
             self._set_status("화면 맞춤을 바꿀 시각 클립을 선택하세요")
             return False
-        self._execute_edit("화면 배치 변경", lambda: setattr(clip, "fit_mode", fit_mode))
-        return True
+        mode = FIT_TO_CORE.get(fit_mode)
+        if mode is None:
+            self._set_status("지원하지 않는 화면 배치 프리셋입니다")
+            return False
+        return self._execute_core(
+            UpdateVisualProperties(clip.clip_id, fit_mode=mode),
+            "화면 배치를 변경했습니다",
+        ) is not None
 
     def rotate_selected_clip(self, degrees: int) -> bool:
         clip = self.selected_clip
@@ -1488,44 +1748,49 @@ class MockController(QObject):
             self._set_status("회전할 영상 또는 사진 클립을 선택하세요")
             return False
         new_value = (clip.rotation + degrees) % 360
-        self._execute_edit("클립 회전", lambda: setattr(clip, "rotation", new_value))
-        return True
+        try:
+            rotation = UserRotation(new_value)
+        except ValueError:
+            self._set_status("사용자 회전은 90도 단위여야 합니다")
+            return False
+        return self._execute_core(
+            UpdateVisualProperties(clip.clip_id, user_rotation=rotation),
+            "클립을 회전했습니다",
+        ) is not None
 
     def set_clip_effect(self, effect: str) -> bool:
         clip = self.selected_clip
         if len(self.selected_clips) != 1 or clip is None or clip.track is not TrackKind.VISUAL:
             self._set_status("효과를 적용할 시각 클립을 선택하세요")
             return False
-        self._execute_edit("시각 효과 변경", lambda: setattr(clip, "effect", effect))
-        return True
+        preset = EFFECT_TO_CORE.get(effect)
+        if preset is None:
+            self._set_status("지원하지 않는 시각 효과 프리셋입니다")
+            return False
+        return self._execute_core(
+            UpdateVisualProperties(clip.clip_id, effect_preset=preset),
+            "시각 효과를 변경했습니다",
+        ) is not None
 
     def add_text(self, kind: str) -> bool:
         if not self.state.visual_clips:
             self._set_status("텍스트를 추가하려면 먼저 영상이나 사진을 배치하세요")
             return False
-        if kind == "제목":
-            start_ms = 0
-        elif kind == "크레딧":
-            start_ms = max(0, self.state.total_duration_ms - 3_000)
-        else:
-            start_ms = min(self.state.playhead_ms, max(0, self.state.total_duration_ms - 3_000))
-        clip = MockClip(
-            self._next_id("text"),
-            TrackKind.TEXT,
-            None,
-            f"{kind} · 텍스트를 입력하세요",
-            start_ms,
-            3_000,
-            text_kind=kind,
+        text_kind = TEXT_KIND_TO_CORE.get(kind)
+        if text_kind is None:
+            self._set_status("지원하지 않는 텍스트 종류입니다")
+            return False
+        clip_id = self._next_id("text")
+        project = self._execute_core(
+            AddTextClip(clip_id, text_kind, self.preview_position),
+            f"{kind}을 추가했습니다",
         )
-
-        def operation() -> None:
-            self.state.text_clips.append(clip)
-            self.state.selected_clip_id = clip.clip_id
-            self.state.selected_clip_ids = [clip.clip_id]
-            self.state.selected_asset_id = None
-
-        self._execute_edit(f"{kind} 추가", operation)
+        if project is None:
+            return False
+        self.state.selected_clip_id = clip_id
+        self.state.selected_clip_ids = [clip_id]
+        self.state.selected_asset_id = None
+        self._publish()
         return True
 
     def update_selected_text(
@@ -1548,30 +1813,51 @@ class MockController(QObject):
             self._set_status("편집할 텍스트를 선택하세요")
             return False
 
-        def operation() -> None:
-            if kind is not None:
-                clip.text_kind = kind
-            if start_ms is not None:
-                clip.start_ms = max(0, start_ms)
-            clip.text_content = content
-            if font is not None:
-                clip.text_font = font
-            if size is not None:
-                clip.text_size = min(96, max(12, size))
-            if bold is not None:
-                clip.text_bold = bold
-            if color is not None:
-                clip.text_color = color
-            if alignment is not None:
-                clip.text_alignment = alignment
-            clip.text_position = position
-            clip.text_animation = animation
-            clip.duration_ms = max(500, duration_ms)
-            shown = content.strip() or "텍스트를 입력하세요"
-            clip.label = f"{clip.text_kind} · {shown}"
-
-        self._execute_edit("텍스트 속성 적용", operation)
-        return True
+        try:
+            current = self._media_library.project.clip(clip.clip_id)
+        except KeyError:
+            self._set_status("텍스트 클립을 찾을 수 없습니다")
+            return False
+        assert current.text is not None
+        requested_kind = kind if kind is not None else clip.text_kind or "캡션"
+        requested_font = font if font is not None else clip.text_font
+        requested_color = color if color is not None else clip.text_color
+        requested_alignment = (
+            alignment if alignment is not None else clip.text_alignment
+        )
+        if (
+            requested_kind not in TEXT_KIND_TO_CORE
+            or requested_font not in FONT_TO_CORE
+            or requested_color not in COLOR_TO_HEX
+            or requested_alignment not in ALIGNMENT_TO_CORE
+            or position not in POSITION_Y
+            or animation not in ANIMATION_TO_CORE
+        ):
+            self._set_status("지원하지 않는 텍스트 스타일 또는 애니메이션입니다")
+            return False
+        text = TextOverlay(
+            kind=TEXT_KIND_TO_CORE[requested_kind],
+            content=content,
+            style=TextStyle(
+                font_family=FONT_TO_CORE[requested_font],
+                size=size if size is not None else clip.text_size,
+                bold=bold if bold is not None else clip.text_bold,
+                color=COLOR_TO_HEX[requested_color],
+                outline_color="#FFFFFF" if requested_color == "검정" else "#000000",
+                alignment=ALIGNMENT_TO_CORE[requested_alignment],
+            ),
+            position=NormalizedPosition(5_000, POSITION_Y[position]),
+            animation=ANIMATION_TO_CORE[animation],
+        )
+        command = UpdateTextProperties(
+            clip.clip_id,
+            text,
+            ProjectTime.from_milliseconds(
+                clip.start_ms if start_ms is None else max(0, start_ms)
+            ),
+            ProjectTime.from_milliseconds(max(500, duration_ms)),
+        )
+        return self._execute_core(command, "텍스트 속성을 적용했습니다") is not None
 
     def update_transition_for_selected(self, transition_type: str, duration_ms: int) -> bool:
         clip = self.selected_clip
@@ -1586,17 +1872,22 @@ class MockController(QObject):
         if duration_ms < 100 or duration_ms > max_duration:
             self._set_status("전환 길이는 양쪽 클립이 허용하는 범위 안이어야 합니다")
             return False
-        boundary = f"{clip.clip_id}|{self.state.visual_clips[index + 1].clip_id}"
-        value = "없음" if transition_type == "없음" else f"{transition_type} · {duration_ms / 1_000:g}초"
-
-        def operation() -> None:
-            if transition_type == "없음":
-                self.state.transitions.pop(boundary, None)
-            else:
-                self.state.transitions[boundary] = value
-
-        self._execute_edit("전환 속성 적용", operation)
-        return True
+        next_clip = self.state.visual_clips[index + 1]
+        if transition_type != "없음" and transition_type not in TRANSITION_TO_CORE:
+            self._set_status("지원하지 않는 전환 프리셋입니다")
+            return False
+        preset = (
+            None if transition_type == "없음" else TRANSITION_TO_CORE[transition_type]
+        )
+        return self._execute_core(
+            UpdateTransition(
+                clip.clip_id,
+                next_clip.clip_id,
+                preset,
+                ProjectTime.from_milliseconds(duration_ms),
+            ),
+            "전환 속성을 적용했습니다",
+        ) is not None
 
     def reset_selected_properties(self) -> bool:
         clip = self.selected_clip
@@ -1604,25 +1895,48 @@ class MockController(QObject):
             self._set_status("기본값으로 되돌릴 클립 하나를 선택하세요")
             return False
 
-        def operation() -> None:
-            clip.volume = 100
-            clip.muted = False
-            clip.fit_mode = "맞춤"
-            clip.rotation = 0
-            clip.effect = "없음"
-            clip.fade_in_ms = 0
-            clip.fade_out_ms = 0
-            clip.ducking = "꺼짐"
-            clip.text_font = "맑은 고딕"
-            clip.text_size = 32
-            clip.text_bold = True
-            clip.text_color = "흰색"
-            clip.text_alignment = "가운데"
-            clip.text_position = "아래"
-            clip.text_animation = "없음"
-
-        self._execute_edit("선택 속성 기본값 복원", operation)
-        return True
+        if clip.track is TrackKind.TEXT:
+            core_clip = self._media_library.project.clip(clip.clip_id)
+            assert core_clip.text is not None
+            text = TextOverlay(kind=core_clip.text.kind, content=core_clip.text.content)
+            return self._execute_core(
+                UpdateTextProperties(
+                    clip.clip_id,
+                    text,
+                    core_clip.timeline_start,
+                    core_clip.duration,
+                ),
+                "텍스트 속성을 기본값으로 복원했습니다",
+            ) is not None
+        if clip.track is TrackKind.VISUAL:
+            asset = self.asset_for_clip(clip)
+            audio_fields = asset is not None and asset.kind is MediaKind.VIDEO
+            command = UpdateClipTiming(
+                clip.clip_id,
+                photo_duration=(
+                    ProjectTime.from_milliseconds(clip.duration_ms)
+                    if asset is not None and asset.kind is MediaKind.PHOTO
+                    else None
+                ),
+                audio_level=AudioLevel() if audio_fields else None,
+                audio_muted=False if audio_fields else None,
+                fit_mode=FitMode.FIT,
+                user_rotation=UserRotation.NONE,
+                brightness=Brightness(),
+                effect_preset=VisualEffectPreset.NONE,
+                history_label="선택 속성 기본값 복원",
+            )
+        else:
+            command = UpdateClipTiming(
+                clip.clip_id,
+                audio_level=AudioLevel(),
+                audio_muted=False,
+                fade_in=ProjectTime.zero(),
+                fade_out=ProjectTime.zero(),
+                ducking=DuckingPreset.OFF,
+                history_label="선택 속성 기본값 복원",
+            )
+        return self._execute_core(command, "선택 속성을 기본값으로 복원했습니다") is not None
 
     def add_transition(self) -> bool:
         clip = self.selected_clip
@@ -1634,43 +1948,66 @@ class MockController(QObject):
             self._set_status("전환에는 인접한 다음 시각 클립이 필요합니다")
             return False
         next_clip = self.state.visual_clips[index + 1]
-        boundary = f"{clip.clip_id}|{next_clip.clip_id}"
-        self._execute_edit(
-            "페이드 전환 추가",
-            lambda: self.state.transitions.__setitem__(boundary, "페이드 · 0.75초"),
+        maximum_ms = min(clip.duration_ms, next_clip.duration_ms) // 2
+        duration_ms = min(750, maximum_ms)
+        if duration_ms < 100:
+            self._set_status("전환을 넣기에는 인접 클립이 너무 짧습니다")
+            return False
+        return self._execute_core(
+            UpdateTransition(
+                clip.clip_id,
+                next_clip.clip_id,
+                TransitionPreset.FADE,
+                ProjectTime.from_milliseconds(duration_ms),
+            ),
+            "페이드 전환을 추가했습니다",
+        ) is not None
+
+    def add_recorded_narration(self, source_path: str) -> bool:
+        """Add an already verified WAV without deleting it on later project edits."""
+
+        path = Path(source_path).expanduser().resolve(strict=False)
+        try:
+            with wave.open(str(path), "rb") as stream:
+                frames = stream.getnframes()
+                sample_rate = stream.getframerate()
+                if frames <= 0 or sample_rate <= 0:
+                    raise ValueError("WAV 길이가 비어 있습니다.")
+        except (OSError, EOFError, ValueError, wave.Error) as error:
+            self._set_status(f"녹음 WAV를 프로젝트에 추가할 수 없습니다 · {error}")
+            return False
+        duration = ProjectTime.from_seconds(Fraction(frames, sample_rate))
+        asset_id = self._next_id("media-recording")
+        clip_id = self._next_id("narration")
+        reference = MediaReference(
+            asset_id=asset_id,
+            name=path.name,
+            source_path=str(path),
+            kind=CoreMediaKind.AUDIO,
+            duration=duration,
+            primary_stream_index=0,
+            streams=(
+                MediaStream(
+                    0,
+                    MediaStreamKind.AUDIO,
+                    "pcm_s16le",
+                    MediaTimeBase(1, sample_rate),
+                    duration_ts=frames,
+                    sample_rate=sample_rate,
+                ),
+            ),
         )
+        project = self._execute_core(
+            AddRecordedNarration(reference, clip_id, self.preview_position),
+            "녹음 내레이션을 프로젝트에 추가했습니다",
+        )
+        if project is None:
+            return False
+        self.state.selected_clip_id = clip_id
+        self.state.selected_clip_ids = [clip_id]
+        self.state.selected_asset_id = None
+        self._publish()
         return True
-
-    def add_recorded_narration(self) -> None:
-        recording = MockAsset(
-            "media-recording",
-            "목업 내레이션.wav",
-            MediaKind.AUDIO,
-            5_000,
-            None,
-            None,
-            "#9e6b35",
-            r"C:\MockMedia\목업 내레이션.wav",
-        )
-        clip = MockClip(
-            self._next_id("narration"),
-            TrackKind.NARRATION,
-            "media-recording",
-            "목업 내레이션",
-            self.state.playhead_ms,
-            5_000,
-            source_out_ms=5_000,
-            volume=90,
-        )
-
-        def operation() -> None:
-            self.state.assets.setdefault(recording.asset_id, recording)
-            self.state.narration_clips.append(clip)
-            self.state.selected_clip_id = clip.clip_id
-            self.state.selected_clip_ids = [clip.clip_id]
-            self.state.selected_asset_id = None
-
-        self._execute_edit("내레이션 녹음 추가", operation)
 
     def _set_original_canvas_reference(self) -> bool:
         video_asset: MockAsset | None = None
@@ -1686,9 +2023,26 @@ class MockController(QObject):
         reference = video_asset or photo_asset
         if reference is None or reference.width is None or reference.height is None:
             return False
+        width, height = reference.width, reference.height
+        try:
+            core_reference = self._media_library.project.media_reference(reference.asset_id)
+        except KeyError:
+            core_reference = None
+        if core_reference is not None:
+            primary = next(
+                (
+                    stream
+                    for stream in core_reference.streams
+                    if stream.kind is MediaStreamKind.VIDEO
+                    and stream.index == core_reference.primary_stream_index
+                ),
+                None,
+            )
+            if primary is not None and primary.rotation_degrees in {90, 270}:
+                width, height = height, width
         self.state.reference_asset_id = reference.asset_id
-        self.state.canvas_width = reference.width
-        self.state.canvas_height = reference.height
+        self.state.canvas_width = width
+        self.state.canvas_height = height
         return True
 
     def set_canvas_mode(self, mode: str) -> bool:

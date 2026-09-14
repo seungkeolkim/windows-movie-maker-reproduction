@@ -35,9 +35,11 @@ class FrameTarget:
     time_base_numerator: int
     time_base_denominator: int
     start_pts: int
+    project: Project | None = None
+    project_position: ProjectTime | None = None
 
     @property
-    def cache_key(self) -> tuple[str, str, str, int, int]:
+    def cache_key(self) -> tuple[object, ...]:
         """Return a session-local identity for the requested source frame."""
 
         return (
@@ -46,6 +48,12 @@ class FrameTarget:
             self.source_path,
             self.stream_index,
             self.source_pts,
+            hash(self.project) if self.project is not None else None,
+            (
+                self.project_position.nanoseconds
+                if self.project_position is not None
+                else None
+            ),
         )
 
 
@@ -211,6 +219,8 @@ def frame_at_project_time(project: Project, position: ProjectTime) -> PreviewPos
             time_base_numerator=numerator,
             time_base_denominator=denominator,
             start_pts=start_pts,
+            project=project,
+            project_position=position,
         ),
     )
 

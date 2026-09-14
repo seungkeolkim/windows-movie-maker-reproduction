@@ -10,8 +10,11 @@ from movie_maker.project.model import (
     NORMAL_PLAYBACK_RATE,
     ZERO_TIME,
     AudioLevel,
+    Brightness,
     Canvas,
     Clip,
+    DuckingPreset,
+    FitMode,
     MediaKind,
     MediaReference,
     MediaStream,
@@ -21,6 +24,9 @@ from movie_maker.project.model import (
     ProjectValidationError,
     TimelineTrack,
     TrackKind,
+    UserRotation,
+    VisualEffectPreset,
+    transitions_for_tracks,
 )
 from movie_maker.project.time import ProjectTime
 
@@ -62,6 +68,19 @@ def _primary_stream(media: MediaReference) -> MediaStream | None:
         (stream for stream in media.streams if stream.index == media.primary_stream_index),
         None,
     )
+
+
+def _display_dimensions(media: MediaReference) -> tuple[int | None, int | None]:
+    """Return dimensions after the input rotation metadata FFmpeg will apply."""
+
+    primary = _primary_stream(media)
+    if (
+        primary is not None
+        and primary.kind is MediaStreamKind.VIDEO
+        and primary.rotation_degrees in {90, 270}
+    ):
+        return media.height, media.width
+    return media.width, media.height
 
 
 def _snap_to_units(time: ProjectTime, units_per_second: Fraction) -> ProjectTime:
@@ -139,7 +158,12 @@ def _replace_track(
         tracks = tuple(
             replacement if track.kind is kind else track for track in project.tracks
         )
-        return replace(project, tracks=tracks, canvas=canvas or project.canvas)
+        return replace(
+            project,
+            tracks=tracks,
+            canvas=canvas or project.canvas,
+            transitions=transitions_for_tracks(project.transitions, tracks),
+        )
     except ProjectValidationError as error:
         raise CommandRejected(str(error)) from error
 
@@ -322,14 +346,15 @@ class AddMediaClip:
             source_out=source_out,
         )
         next_canvas = project.canvas
+        display_width, display_height = _display_dimensions(media)
         if (
             track_kind is TrackKind.VISUAL
             and not track.clips
             and project.canvas.width is None
-            and media.width is not None
-            and media.height is not None
+            and display_width is not None
+            and display_height is not None
         ):
-            next_canvas = Canvas(media.width, media.height, media.asset_id)
+            next_canvas = Canvas(display_width, display_height, media.asset_id)
 
         command = _ReplaceTimelineRange(
             track=track_kind,
@@ -455,8 +480,17 @@ class SplitClip:
         )
         if front_duration < MIN_SPLIT_DURATION or back_duration < MIN_SPLIT_DURATION:
             raise CommandRejected("분할 뒤 양쪽 클립은 각각 0.25초 이상이어야 합니다.")
+        if front_duration < clip.fade_in or back_duration < clip.fade_out:
+            raise CommandRejected(
+                "페이드가 진행 중인 구간에서는 분할할 수 없습니다. 페이드 길이를 줄이세요."
+            )
 
-        front = replace(clip, duration=front_duration, source_out=split_source)
+        front = replace(
+            clip,
+            duration=front_duration,
+            source_out=split_source,
+            fade_out=ZERO_TIME,
+        )
         back = replace(
             clip,
             clip_id=self.trailing_clip_id,
@@ -464,6 +498,7 @@ class SplitClip:
             timeline_start=front.timeline_end,
             duration=back_duration,
             source_in=split_source,
+            fade_in=ZERO_TIME,
         )
         command = _ReplaceTimelineRange(
             track=track.kind,
@@ -487,6 +522,13 @@ class UpdateClipTiming:
     timeline_start: ProjectTime | None = None
     audio_level: AudioLevel | None = None
     audio_muted: bool | None = None
+    fade_in: ProjectTime | None = None
+    fade_out: ProjectTime | None = None
+    ducking: DuckingPreset | None = None
+    fit_mode: FitMode | None = None
+    user_rotation: UserRotation | None = None
+    brightness: Brightness | None = None
+    effect_preset: VisualEffectPreset | None = None
     history_label: str = "클립 속성 적용"
 
     @property
@@ -502,7 +544,16 @@ class UpdateClipTiming:
                 raise CommandRejected("사진에는 원본 시작과 끝을 지정할 수 없습니다.")
             if self.playback_rate is not None:
                 raise CommandRejected("사진에는 재생 속도를 지정할 수 없습니다.")
-            if self.audio_level is not None or self.audio_muted is not None:
+            if any(
+                value is not None
+                for value in (
+                    self.audio_level,
+                    self.audio_muted,
+                    self.fade_in,
+                    self.fade_out,
+                    self.ducking,
+                )
+            ):
                 raise CommandRejected("사진에는 오디오 속성을 지정할 수 없습니다.")
             if self.photo_duration is None:
                 raise CommandRejected("변경할 사진 표시 시간을 입력하세요.")
@@ -546,21 +597,37 @@ class UpdateClipTiming:
             duration = source_span_duration(source_in, source_out, rate)
             if duration < MIN_TIMED_CLIP_DURATION:
                 raise CommandRejected("트리밍과 속도 변경 뒤 클립은 0.5초 이상이어야 합니다.")
+            fade_in = self.fade_in if self.fade_in is not None else clip.fade_in
+            fade_out = self.fade_out if self.fade_out is not None else clip.fade_out
+            if not isinstance(fade_in, ProjectTime) or not isinstance(fade_out, ProjectTime):
+                raise CommandRejected("페이드 길이는 프로젝트 시간 값이어야 합니다.")
+            if fade_in.nanoseconds < 0 or fade_out.nanoseconds < 0:
+                raise CommandRejected("페이드 길이는 0보다 작을 수 없습니다.")
+            if fade_in + fade_out > duration:
+                raise CommandRejected("페이드 합계가 오디오 클립 길이보다 길 수 없습니다.")
+            ducking = self.ducking if self.ducking is not None else clip.ducking
+            if not isinstance(ducking, DuckingPreset):
+                raise CommandRejected("내레이션 더킹 프리셋이 유효하지 않습니다.")
+            if track.kind is not TrackKind.NARRATION and ducking is not DuckingPreset.OFF:
+                raise CommandRejected("내레이션 클립만 음악 더킹을 요청할 수 있습니다.")
             replacement = replace(
                 clip,
                 source_in=source_in,
                 source_out=source_out,
                 duration=duration,
                 playback_rate=rate,
+                fade_in=fade_in,
+                fade_out=fade_out,
+                ducking=ducking,
             )
 
             if self.audio_level is not None or self.audio_muted is not None:
                 if not (
                     media.kind is MediaKind.VIDEO
-                    or track.kind is TrackKind.MUSIC
+                    or track.kind in {TrackKind.MUSIC, TrackKind.NARRATION}
                 ):
                     raise CommandRejected(
-                        "오디오 속성은 영상 원본음과 음악 클립에서만 변경할 수 있습니다."
+                        "오디오 속성은 영상 원본음, 음악과 내레이션에서만 변경할 수 있습니다."
                     )
                 if self.audio_level is not None and not isinstance(
                     self.audio_level, AudioLevel
@@ -588,6 +655,40 @@ class UpdateClipTiming:
             if track.kind is TrackKind.VISUAL and self.timeline_start != clip.timeline_start:
                 raise CommandRejected("시각 클립 시작은 리플 순서에서 자동으로 계산됩니다.")
             replacement = replace(replacement, timeline_start=self.timeline_start)
+
+        visual_values = (
+            self.fit_mode,
+            self.user_rotation,
+            self.brightness,
+            self.effect_preset,
+        )
+        if any(value is not None for value in visual_values):
+            if track.kind is not TrackKind.VISUAL:
+                raise CommandRejected("시각 속성은 영상 또는 사진 클립에만 적용할 수 있습니다.")
+            try:
+                replacement = replace(
+                    replacement,
+                    fit_mode=(
+                        self.fit_mode if self.fit_mode is not None else clip.fit_mode
+                    ),
+                    user_rotation=(
+                        self.user_rotation
+                        if self.user_rotation is not None
+                        else clip.user_rotation
+                    ),
+                    brightness=(
+                        self.brightness
+                        if self.brightness is not None
+                        else clip.brightness
+                    ),
+                    effect_preset=(
+                        self.effect_preset
+                        if self.effect_preset is not None
+                        else clip.effect_preset
+                    ),
+                )
+            except (TypeError, ProjectValidationError) as error:
+                raise CommandRejected(str(error)) from error
 
         if replacement == clip:
             raise CommandRejected("입력한 값이 현재 클립 속성과 같습니다.")

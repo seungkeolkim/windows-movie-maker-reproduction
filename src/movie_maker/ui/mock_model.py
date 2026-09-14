@@ -86,6 +86,7 @@ class MockClip:
     muted: bool = False
     fit_mode: str = "맞춤"
     rotation: int = 0
+    brightness: int = 0
     effect: str = "없음"
     fade_in_ms: int = 0
     fade_out_ms: int = 0
@@ -118,6 +119,9 @@ class MockProjectState:
     canvas_width: int | None = None
     canvas_height: int | None = None
     reference_asset_id: str | None = None
+    original_bus_volume: int = 100
+    music_bus_volume: int = 100
+    narration_bus_volume: int = 100
     selected_asset_id: str | None = None
     selected_clip_id: str | None = None
     selected_clip_ids: list[str] = field(default_factory=list)

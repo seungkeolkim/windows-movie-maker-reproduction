@@ -12,6 +12,8 @@ from movie_maker.project.model import (
     ProjectValidationError,
     TimelineTrack,
     TrackKind,
+    Transition,
+    transitions_for_tracks,
 )
 from movie_maker.project.time import ProjectTime
 
@@ -86,7 +88,11 @@ def _replace_track(project: Project, kind: TrackKind, clips: tuple[Clip, ...]) -
         tracks = tuple(
             replacement if track.kind is replacement.kind else track for track in project.tracks
         )
-        return replace(project, tracks=tracks)
+        return replace(
+            project,
+            tracks=tracks,
+            transitions=transitions_for_tracks(project.transitions, tracks),
+        )
     except ProjectValidationError as error:
         raise CommandRejected(str(error)) from error
 
@@ -294,6 +300,38 @@ class RemoveClip:
         return CommandApplication(next_project, InsertClip(clip, index=index))
 
 
+@dataclass(frozen=True, slots=True)
+class _RestoreTransitions:
+    """Apply another inverse and atomically restore its boundary set."""
+
+    command: ProjectCommand
+    expected: tuple[Transition, ...]
+    restored: tuple[Transition, ...]
+    history_label: str
+
+    @property
+    def label(self) -> str:
+        return self.history_label
+
+    def apply(self, project: Project) -> CommandApplication:
+        if project.transitions != self.expected:
+            raise CommandRejected("Transitions changed since the command was prepared.")
+        application = self.command.apply(project)
+        try:
+            next_project = replace(application.project, transitions=self.restored)
+        except ProjectValidationError as error:
+            raise CommandRejected(str(error)) from error
+        return CommandApplication(
+            next_project,
+            _RestoreTransitions(
+                application.inverse,
+                expected=self.restored,
+                restored=self.expected,
+                history_label=self.history_label,
+            ),
+        )
+
+
 class CommandExecutor:
     """Commit successful immutable project transitions and manage session history."""
 
@@ -416,4 +454,17 @@ class CommandExecutor:
             raise CommandContractError("A project command cannot change the schema version.")
         if application.project == current:
             raise CommandContractError("A successful project command must change the project.")
+        if (
+            application.project.transitions != current.transitions
+            and not isinstance(command, _RestoreTransitions)
+        ):
+            application = CommandApplication(
+                application.project,
+                _RestoreTransitions(
+                    application.inverse,
+                    expected=application.project.transitions,
+                    restored=current.transitions,
+                    history_label=label,
+                ),
+            )
         return application

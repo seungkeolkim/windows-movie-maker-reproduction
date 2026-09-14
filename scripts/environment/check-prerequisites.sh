@@ -95,7 +95,8 @@ grep -Eq '[[:space:]]aac[[:space:]]' <<<"$encoders" || fail "An FFmpeg build con
 filters="$("$ffmpeg_path" -hide_banner -filters 2>&1)"
 required_filters=(
     trim atrim setpts asetpts concat scale crop pad fps format setsar aresample aformat atempo adelay
-    volume afade amix alimiter apad anull anullsrc xfade acrossfade drawtext
+    volume afade amix alimiter apad anull anullsrc xfade acrossfade drawtext tpad transpose hflip vflip
+    eq colorbalance hue
 )
 missing_filters=()
 for filter in "${required_filters[@]}"; do

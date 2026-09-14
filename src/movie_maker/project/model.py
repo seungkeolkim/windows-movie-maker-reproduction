@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, IntEnum
 from fractions import Fraction
+from itertools import pairwise
 from math import gcd
 from typing import Self
 
@@ -39,6 +40,72 @@ class TrackKind(str, Enum):
     MUSIC = "music"
     NARRATION = "narration"
     TEXT = "text"
+
+
+class FitMode(str, Enum):
+    """Stable visual placement choices."""
+
+    FIT = "fit"
+    FILL = "fill"
+
+
+class UserRotation(IntEnum):
+    """A clockwise user rotation applied after input rotation metadata."""
+
+    NONE = 0
+    CLOCKWISE_90 = 90
+    CLOCKWISE_180 = 180
+    CLOCKWISE_270 = 270
+
+
+class VisualEffectPreset(str, Enum):
+    """The deliberately small executable-free visual effect catalogue."""
+
+    NONE = "none"
+    WARM = "warm"
+    MONOCHROME = "monochrome"
+    VIVID = "vivid"
+
+
+class DuckingPreset(str, Enum):
+    """Music attenuation requested by a narration clip."""
+
+    OFF = "off"
+    LIGHT = "light"
+    MEDIUM = "medium"
+    STRONG = "strong"
+
+
+class TextKind(str, Enum):
+    """Stable generated-text purposes."""
+
+    TITLE = "title"
+    CAPTION = "caption"
+    CREDITS = "credits"
+
+
+class TextAlignment(str, Enum):
+    """Horizontal text alignment within its safe-area box."""
+
+    LEFT = "left"
+    CENTER = "center"
+    RIGHT = "right"
+
+
+class TextAnimationPreset(str, Enum):
+    """The bounded text animation catalogue."""
+
+    NONE = "none"
+    FADE = "fade"
+    SCROLL_UP = "scroll_up"
+
+
+class TransitionPreset(str, Enum):
+    """The bounded visual-boundary transition catalogue."""
+
+    FADE = "fade"
+    DISSOLVE = "dissolve"
+    WIPE_LEFT = "wipe_left"
 
 
 TRACK_ORDER = (
@@ -118,6 +185,124 @@ DEFAULT_AUDIO_LEVEL = AudioLevel()
 
 
 @dataclass(frozen=True, slots=True)
+class Brightness:
+    """A limited integer brightness adjustment, expressed as a percentage."""
+
+    percent: int = 0
+
+    def __post_init__(self) -> None:
+        if type(self.percent) is not int:
+            raise TypeError("Brightness percent must be an integer.")
+        if not -100 <= self.percent <= 100:
+            raise ProjectValidationError("Brightness percent must be between -100 and 100.")
+
+    @property
+    def fraction(self) -> Fraction:
+        return Fraction(self.percent, 100)
+
+
+DEFAULT_BRIGHTNESS = Brightness()
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedPosition:
+    """Resolution-independent coordinates in ten-thousandths of the canvas."""
+
+    x: int = 5_000
+    y: int = 8_500
+
+    def __post_init__(self) -> None:
+        if type(self.x) is not int or type(self.y) is not int:
+            raise TypeError("Normalized position coordinates must be integers.")
+        if not 0 <= self.x <= 10_000 or not 0 <= self.y <= 10_000:
+            raise ProjectValidationError(
+                "Normalized position coordinates must be between 0 and 10000."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class TextStyle:
+    """Persistent, resolution-independent text appearance intent."""
+
+    font_family: str = "Malgun Gothic"
+    size: int = 32
+    bold: bool = True
+    color: str = "#FFFFFF"
+    outline_color: str = "#000000"
+    alignment: TextAlignment = TextAlignment.CENTER
+
+    def __post_init__(self) -> None:
+        _require_text(self.font_family, "font_family")
+        if type(self.size) is not int or not 12 <= self.size <= 200:
+            raise ProjectValidationError("Text size must be an integer between 12 and 200.")
+        if type(self.bold) is not bool:
+            raise ProjectValidationError("Text bold must be a boolean value.")
+        for value, label in (
+            (self.color, "text color"),
+            (self.outline_color, "text outline color"),
+        ):
+            if (
+                not isinstance(value, str)
+                or len(value) != 7
+                or not value.startswith("#")
+            ):
+                raise ProjectValidationError(f"{label} must use #RRGGBB format.")
+            try:
+                int(value[1:], 16)
+            except ValueError as error:
+                raise ProjectValidationError(f"{label} must use #RRGGBB format.") from error
+        if not isinstance(self.alignment, TextAlignment):
+            raise ProjectValidationError("Text alignment must be a TextAlignment value.")
+
+
+DEFAULT_TEXT_STYLE = TextStyle()
+
+
+@dataclass(frozen=True, slots=True)
+class TextOverlay:
+    """Persistent text content, placement, and bounded animation intent."""
+
+    kind: TextKind = TextKind.CAPTION
+    content: str = ""
+    style: TextStyle = DEFAULT_TEXT_STYLE
+    position: NormalizedPosition = NormalizedPosition()
+    animation: TextAnimationPreset = TextAnimationPreset.NONE
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, TextKind):
+            raise ProjectValidationError("Text kind must be a TextKind value.")
+        if not isinstance(self.content, str):
+            raise ProjectValidationError("Text content must be a string.")
+        if not isinstance(self.style, TextStyle):
+            raise ProjectValidationError("Text style must be a TextStyle value.")
+        if not isinstance(self.position, NormalizedPosition):
+            raise ProjectValidationError("Text position must be a NormalizedPosition value.")
+        if not isinstance(self.animation, TextAnimationPreset):
+            raise ProjectValidationError(
+                "Text animation must be a TextAnimationPreset value."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class MixerSettings:
+    """Project-wide track-bus gains, multiplied after per-clip gain."""
+
+    original: AudioLevel = DEFAULT_AUDIO_LEVEL
+    music: AudioLevel = DEFAULT_AUDIO_LEVEL
+    narration: AudioLevel = DEFAULT_AUDIO_LEVEL
+
+    def __post_init__(self) -> None:
+        if any(
+            not isinstance(level, AudioLevel)
+            for level in (self.original, self.music, self.narration)
+        ):
+            raise ProjectValidationError("Mixer settings require AudioLevel values.")
+
+
+DEFAULT_MIXER_SETTINGS = MixerSettings()
+
+
+@dataclass(frozen=True, slots=True)
 class MediaTimeBase:
     """The exact number of seconds represented by one source timestamp unit."""
 
@@ -153,6 +338,7 @@ class MediaStream:
     duration_ts: int | None = None
     average_frame_rate: FrameRate | None = None
     sample_rate: int | None = None
+    rotation_degrees: int = 0
 
     def __post_init__(self) -> None:
         if type(self.index) is not int or self.index < 0:
@@ -182,6 +368,10 @@ class MediaStream:
             raise ProjectValidationError("Video streams cannot define an audio sample rate.")
         if self.kind is MediaStreamKind.AUDIO and self.average_frame_rate is not None:
             raise ProjectValidationError("Audio streams cannot define a video frame rate.")
+        if type(self.rotation_degrees) is not int or not 0 <= self.rotation_degrees < 360:
+            raise ProjectValidationError("Media rotation must be an integer from 0 through 359.")
+        if self.kind is MediaStreamKind.AUDIO and self.rotation_degrees != 0:
+            raise ProjectValidationError("Audio streams cannot define rotation metadata.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +479,14 @@ class Clip:
     playback_rate: PlaybackRate = NORMAL_PLAYBACK_RATE
     audio_level: AudioLevel = DEFAULT_AUDIO_LEVEL
     audio_muted: bool = False
+    fade_in: ProjectTime = ZERO_TIME
+    fade_out: ProjectTime = ZERO_TIME
+    ducking: DuckingPreset = DuckingPreset.OFF
+    fit_mode: FitMode = FitMode.FIT
+    user_rotation: UserRotation = UserRotation.NONE
+    brightness: Brightness = DEFAULT_BRIGHTNESS
+    effect_preset: VisualEffectPreset = VisualEffectPreset.NONE
+    text: TextOverlay | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.clip_id, "clip_id")
@@ -306,6 +504,24 @@ class Clip:
             raise ProjectValidationError("audio_level must be an AudioLevel value.")
         if type(self.audio_muted) is not bool:
             raise ProjectValidationError("audio_muted must be a boolean value.")
+        fade_in = _require_time(self.fade_in, "fade_in")
+        fade_out = _require_time(self.fade_out, "fade_out")
+        if fade_in.nanoseconds < 0 or fade_out.nanoseconds < 0:
+            raise ProjectValidationError("Audio fades cannot be negative.")
+        if fade_in + fade_out > duration:
+            raise ProjectValidationError("Audio fade durations cannot exceed clip duration.")
+        if not isinstance(self.ducking, DuckingPreset):
+            raise ProjectValidationError("ducking must be a DuckingPreset value.")
+        if not isinstance(self.fit_mode, FitMode):
+            raise ProjectValidationError("fit_mode must be a FitMode value.")
+        if not isinstance(self.user_rotation, UserRotation):
+            raise ProjectValidationError("user_rotation must be a UserRotation value.")
+        if not isinstance(self.brightness, Brightness):
+            raise ProjectValidationError("brightness must be a Brightness value.")
+        if not isinstance(self.effect_preset, VisualEffectPreset):
+            raise ProjectValidationError(
+                "effect_preset must be a VisualEffectPreset value."
+            )
         if timeline_start.nanoseconds < 0:
             raise ProjectValidationError("Clip timeline start cannot be negative.")
         if duration.nanoseconds <= 0:
@@ -324,10 +540,36 @@ class Clip:
                 raise ProjectValidationError("Text clips cannot define a playback rate.")
             if self.audio_level != DEFAULT_AUDIO_LEVEL or self.audio_muted:
                 raise ProjectValidationError("Text clips cannot define audio properties.")
+            if self.fade_in != ZERO_TIME or self.fade_out != ZERO_TIME:
+                raise ProjectValidationError("Text clips cannot define audio fades.")
+            if self.ducking is not DuckingPreset.OFF:
+                raise ProjectValidationError("Text clips cannot define audio ducking.")
+            if self.text is None:
+                object.__setattr__(self, "text", TextOverlay())
         else:
             if self.asset_id is None:
                 raise ProjectValidationError("Media clips require an asset_id.")
             _require_text(self.asset_id, "asset_id")
+            if self.text is not None:
+                raise ProjectValidationError("Media clips cannot define text overlay values.")
+
+        if self.track is not TrackKind.VISUAL and (
+            self.fit_mode is not FitMode.FIT
+            or self.user_rotation is not UserRotation.NONE
+            or self.brightness != DEFAULT_BRIGHTNESS
+            or self.effect_preset is not VisualEffectPreset.NONE
+        ):
+            raise ProjectValidationError("Only visual clips can define visual properties.")
+        if self.track not in {TrackKind.VISUAL, TrackKind.MUSIC, TrackKind.NARRATION} and (
+            self.audio_level != DEFAULT_AUDIO_LEVEL
+            or self.audio_muted
+            or self.fade_in != ZERO_TIME
+            or self.fade_out != ZERO_TIME
+            or self.ducking is not DuckingPreset.OFF
+        ):
+            raise ProjectValidationError("This clip type cannot define audio properties.")
+        if self.track is not TrackKind.NARRATION and self.ducking is not DuckingPreset.OFF:
+            raise ProjectValidationError("Only narration clips can request music ducking.")
 
     @property
     def timeline_end(self) -> ProjectTime:
@@ -364,6 +606,45 @@ class TimelineTrack:
 
 
 @dataclass(frozen=True, slots=True)
+class Transition:
+    """A bounded effect attached to one adjacent visual clip-ID boundary."""
+
+    left_clip_id: str
+    right_clip_id: str
+    preset: TransitionPreset
+    duration: ProjectTime
+
+    def __post_init__(self) -> None:
+        _require_text(self.left_clip_id, "left_clip_id")
+        _require_text(self.right_clip_id, "right_clip_id")
+        if self.left_clip_id == self.right_clip_id:
+            raise ProjectValidationError("A transition requires two different clip identifiers.")
+        if not isinstance(self.preset, TransitionPreset):
+            raise ProjectValidationError("Transition preset must be a TransitionPreset value.")
+        duration = _require_time(self.duration, "transition duration")
+        if duration.nanoseconds < 100_000_000:
+            raise ProjectValidationError("Transition duration must be at least 100 milliseconds.")
+
+    @property
+    def boundary(self) -> tuple[str, str]:
+        return self.left_clip_id, self.right_clip_id
+
+
+def transitions_for_tracks(
+    transitions: tuple[Transition, ...],
+    tracks: tuple[TimelineTrack, ...],
+) -> tuple[Transition, ...]:
+    """Drop transitions whose visual adjacency no longer exists."""
+
+    visual = tracks[TRACK_ORDER.index(TrackKind.VISUAL)].clips
+    adjacent = {
+        (left.clip_id, right.clip_id)
+        for left, right in pairwise(visual)
+    }
+    return tuple(transition for transition in transitions if transition.boundary in adjacent)
+
+
+@dataclass(frozen=True, slots=True)
 class Project:
     """The complete persistent, UI-independent project state."""
 
@@ -373,6 +654,8 @@ class Project:
     canvas: Canvas
     media: tuple[MediaReference, ...]
     tracks: tuple[TimelineTrack, ...]
+    mixer: MixerSettings = DEFAULT_MIXER_SETTINGS
+    transitions: tuple[Transition, ...] = ()
 
     @classmethod
     def empty(cls, *, project_id: str, name: str = "제목 없음") -> Self:
@@ -385,6 +668,8 @@ class Project:
             canvas=Canvas(),
             media=(),
             tracks=tuple(TimelineTrack(kind=kind) for kind in TRACK_ORDER),
+            mixer=DEFAULT_MIXER_SETTINGS,
+            transitions=(),
         )
 
     def __post_init__(self) -> None:
@@ -402,6 +687,12 @@ class Project:
             raise ProjectValidationError("Project media must use an immutable tuple.")
         if type(self.tracks) is not tuple:
             raise ProjectValidationError("Project tracks must use an immutable tuple.")
+        if not isinstance(self.mixer, MixerSettings):
+            raise ProjectValidationError("Project mixer must be a MixerSettings value.")
+        if type(self.transitions) is not tuple or any(
+            not isinstance(transition, Transition) for transition in self.transitions
+        ):
+            raise ProjectValidationError("Project transitions must be an immutable Transition tuple.")
 
         media_by_id: dict[str, MediaReference] = {}
         for media in self.media:
@@ -464,15 +755,12 @@ class Project:
                         "Photo clips cannot define a source range or playback rate."
                     )
                 if source.kind is MediaKind.PHOTO and (
-                    clip.audio_level != DEFAULT_AUDIO_LEVEL or clip.audio_muted
+                    clip.audio_level != DEFAULT_AUDIO_LEVEL
+                    or clip.audio_muted
+                    or clip.fade_in != ZERO_TIME
+                    or clip.fade_out != ZERO_TIME
                 ):
                     raise ProjectValidationError("Photo clips cannot define audio properties.")
-                if track.kind is TrackKind.NARRATION and (
-                    clip.audio_level != DEFAULT_AUDIO_LEVEL or clip.audio_muted
-                ):
-                    raise ProjectValidationError(
-                        "Narration clips cannot define audio properties before W-09."
-                    )
 
             if track.kind is TrackKind.VISUAL:
                 for clip in track.clips:
@@ -481,6 +769,30 @@ class Project:
                             "Visual clips must be contiguous from the project origin."
                         )
                     visual_cursor = clip.timeline_end
+
+        visual_clips = self.track(TrackKind.VISUAL).clips
+        adjacent_boundaries = {
+            (left.clip_id, right.clip_id)
+            for left, right in pairwise(visual_clips)
+        }
+        transition_boundaries: set[tuple[str, str]] = set()
+        for transition in self.transitions:
+            if transition.boundary not in adjacent_boundaries:
+                raise ProjectValidationError(
+                    "Transitions must identify one current adjacent visual boundary."
+                )
+            if transition.boundary in transition_boundaries:
+                raise ProjectValidationError("A visual boundary can contain only one transition.")
+            left = self.clip(transition.left_clip_id)
+            right = self.clip(transition.right_clip_id)
+            maximum = ProjectTime(
+                min(left.duration.nanoseconds, right.duration.nanoseconds) // 2
+            )
+            if transition.duration > maximum:
+                raise ProjectValidationError(
+                    "Transition duration cannot exceed half of either adjacent clip."
+                )
+            transition_boundaries.add(transition.boundary)
 
         if self.canvas.reference_asset_id is not None:
             reference = media_by_id.get(self.canvas.reference_asset_id)

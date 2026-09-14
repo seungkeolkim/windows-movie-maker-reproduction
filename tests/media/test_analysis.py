@@ -106,6 +106,29 @@ def test_video_analysis_preserves_exact_time_metadata_and_converts_reference(tmp
     assert (source.read_bytes(), source.stat().st_size, source.stat().st_mtime_ns) == before
 
 
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"side_data_list": [{"rotation": -90}]}, 270),
+        ({"tags": {"rotate": "450"}}, 90),
+    ],
+)
+def test_video_rotation_metadata_is_preserved_separately_from_user_edits(
+    tmp_path, metadata, expected
+) -> None:
+    source = tmp_path / "회전 영상.mp4"
+    source.write_bytes(b"original-video")
+    payload = _video_payload()
+    payload["streams"][0].update(metadata)
+
+    result = FfprobeAnalyzer(runner=lambda _arguments, timeout: _completed(payload)).analyze(
+        source
+    )
+
+    assert isinstance(result, MediaAnalysisSuccess)
+    assert result.analysis.streams[0].rotation_degrees == expected
+
+
 def test_photo_analysis_has_dimensions_without_project_duration(tmp_path) -> None:
     source = tmp_path / "한라산 사진.PNG"
     source.write_bytes(b"original-photo")
