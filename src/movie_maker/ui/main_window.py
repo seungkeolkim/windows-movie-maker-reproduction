@@ -76,7 +76,13 @@ from movie_maker.exporting import (
     ExportSucceeded,
     build_export_plan,
 )
-from movie_maker.media import AUDIO_EXTENSIONS, PHOTO_EXTENSIONS, VIDEO_EXTENSIONS
+from movie_maker.media import (
+    AUDIO_EXTENSIONS,
+    PHOTO_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    RelinkErrorCode,
+    RelinkFailure,
+)
 from movie_maker.preview import (
     DecodedFrame,
     FrameTarget,
@@ -84,7 +90,7 @@ from movie_maker.preview import (
     PreviewDecodeFailure,
     frame_at_project_time,
 )
-from movie_maker.project import Project, ProjectTime
+from movie_maker.project import Project, ProjectTime, RecentProjectStatus
 from movie_maker.ui.audio import AudioOutput, AudioOutputError, AudioPreviewBridge, QtAudioOutput
 from movie_maker.ui.dialogs import (
     DecisionDialog,
@@ -174,6 +180,38 @@ MEDIA_FILE_FILTER = ";;".join(
 )
 
 
+def dropped_media_paths(urls: Sequence[QUrl], *, maximum_files: int = 200) -> tuple[str, ...]:
+    """Expand local drops one directory level without hidden or unbounded recursion."""
+
+    supported = VIDEO_EXTENSIONS | PHOTO_EXTENSIONS | AUDIO_EXTENSIONS
+    paths: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        if len(paths) >= maximum_files:
+            break
+        if not url.isLocalFile():
+            continue
+        path = Path(url.toLocalFile())
+        candidates: Sequence[Path] = (path,)
+        if path.is_dir():
+            try:
+                candidates = tuple(
+                    child
+                    for child in sorted(path.iterdir())
+                    if child.is_file() and not child.name.startswith(".") and child.suffix.casefold() in supported
+                )
+            except OSError:
+                candidates = ()
+        for candidate in candidates:
+            if len(paths) >= maximum_files:
+                break
+            key = str(candidate.resolve(strict=False))
+            if key not in seen:
+                seen.add(key)
+                paths.append(key)
+    return tuple(paths)
+
+
 class MainWindow(QMainWindow):
     """S-EDITOR view combining real MVP services with later-stage mock states."""
 
@@ -228,6 +266,10 @@ class MainWindow(QMainWindow):
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(16)
         self._preview_timer.timeout.connect(self.controller.advance_playback)
+        self._maintenance_timer = QTimer(self)
+        self._maintenance_timer.setInterval(250)
+        self._maintenance_timer.timeout.connect(self.controller.autosave_tick)
+        self._maintenance_timer.start()
 
         self._build_central_workspace()
         self._build_library_dock()
@@ -241,6 +283,7 @@ class MainWindow(QMainWindow):
         self.controller.state_changed.connect(self.refresh)
         self.controller.status_changed.connect(self._show_status)
         self.controller.export_changed.connect(self._refresh_export_panel)
+        self.controller.relink_confirmation_requested.connect(self._show_relink_confirmation)
         self._preview_bridge.frame_ready.connect(self._accept_preview_frame)
         self._preview_bridge.frame_failed.connect(self._accept_preview_failure)
         self._audio_bridge.audio_ready.connect(self._accept_audio)
@@ -248,6 +291,8 @@ class MainWindow(QMainWindow):
         self._export_bridge.progress_changed.connect(self._accept_export_progress)
         self._export_bridge.export_finished.connect(self._accept_export_result)
         self.refresh()
+        if self.controller.pending_recovery is not None:
+            QTimer.singleShot(0, self._open_recovery)
 
     # ------------------------------------------------------------------
     # Widget construction
@@ -323,11 +368,12 @@ class MainWindow(QMainWindow):
         secondary_row.addWidget(example_button)
         secondary_row.addStretch()
         layout.addLayout(secondary_row)
-        recent = QPushButton("최근 프로젝트 · 제주 여행 목업 · 1.0")
-        recent.setObjectName("E-START-RECENT")
-        recent.setToolTip("목업 고정 최근 프로젝트를 엽니다")
-        recent.clicked.connect(self.controller.load_sample_project)
-        layout.addWidget(recent, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.start_recent = QPushButton("최근 프로젝트 없음")
+        self.start_recent.setObjectName("E-START-RECENT")
+        self.start_recent.setEnabled(False)
+        self.start_recent.clicked.connect(self._open_start_recent)
+        layout.addWidget(self.start_recent, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._refresh_start_recent()
         layout.addStretch()
         return page
 
@@ -630,7 +676,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(button_row)
         self.library_relink_button = QPushButton("원본 다시 연결 · 1.0")
         self.library_relink_button.setObjectName("E-LIBRARY-RELINK")
-        self.library_relink_button.clicked.connect(self.controller.relink_selected_asset)
+        self.library_relink_button.clicked.connect(self._request_relink_selected)
         layout.addWidget(self.library_relink_button)
         self.library_count = QLabel("0개 항목 · 백그라운드 작업 없음")
         self.library_count.setObjectName("E-LIBRARY-JOBS")
@@ -755,8 +801,15 @@ class MainWindow(QMainWindow):
         self.media_proxy_button.setObjectName("E-MEDIA-PROXY")
         self.media_proxy_button.clicked.connect(self.controller.toggle_selected_proxy)
         layout.addWidget(self.media_proxy_button)
+        self.media_cache_button = QPushButton("캐시 다시 생성")
+        self.media_cache_button.setObjectName("E-MEDIA-CACHE-REGENERATE")
+        self.media_cache_button.setToolTip(
+            "선택한 미디어의 썸네일·파형·프록시 캐시만 지우고 다시 생성합니다"
+        )
+        self.media_cache_button.clicked.connect(self.controller.regenerate_selected_cache)
+        layout.addWidget(self.media_cache_button)
         relink = QPushButton("새 원본 찾기 · 1.0")
-        relink.clicked.connect(self.controller.relink_selected_asset)
+        relink.clicked.connect(self._request_relink_selected)
         layout.addWidget(relink)
         layout.addStretch()
         return page
@@ -899,11 +952,13 @@ class MainWindow(QMainWindow):
         apply_button.setProperty("primary", True)
         apply_button.clicked.connect(self._apply_audio_properties)
         layout.addWidget(apply_button)
-        waveform = QLabel("파형 없음 · 오디오 편집은 파형 없이 동작합니다 · 생성은 W-10 범위")
-        waveform.setObjectName("E-AUDIO-WAVEFORM")
-        waveform.setProperty("role", "summary")
-        waveform.setWordWrap(True)
-        layout.addWidget(waveform)
+        self.audio_waveform = QLabel(
+            "파형 없음 · 오디오 미디어를 가져오면 백그라운드에서 생성합니다"
+        )
+        self.audio_waveform.setObjectName("E-AUDIO-WAVEFORM")
+        self.audio_waveform.setProperty("role", "summary")
+        self.audio_waveform.setWordWrap(True)
+        layout.addWidget(self.audio_waveform)
         layout.addStretch()
         return page
 
@@ -1102,8 +1157,8 @@ class MainWindow(QMainWindow):
         menu_bar.setObjectName("E-WINDOW-MENU")
         file_menu = menu_bar.addMenu("파일")
         self._add_actions(file_menu, "new", "open")
-        recent_menu = file_menu.addMenu("최근 프로젝트 · 1.0")
-        recent_menu.addAction(self._actions["sample"])
+        self.recent_menu = file_menu.addMenu("최근 프로젝트")
+        self._refresh_recent_menu()
         file_menu.addSeparator()
         self._add_actions(file_menu, "save", "save_as", "import")
         file_menu.addSeparator()
@@ -1160,6 +1215,69 @@ class MainWindow(QMainWindow):
         self._add_actions(mock_menu, "sample", "empty", "missing", "import_failure")
         mock_menu.addSeparator()
         self._add_actions(mock_menu, "recovery", "version_error", "onboarding", "runtime")
+
+    def _refresh_recent_menu(self) -> None:
+        self.recent_menu.clear()
+        entries = self.controller.recent_projects
+        self._refresh_start_recent()
+        if not entries:
+            empty = self.recent_menu.addAction("최근 프로젝트 없음")
+            empty.setEnabled(False)
+            return
+        for entry in entries:
+            if entry.status is RecentProjectStatus.AVAILABLE:
+                action = self.recent_menu.addAction(entry.name)
+                action.setToolTip(entry.path)
+                action.triggered.connect(
+                    lambda _checked=False, path=entry.path: self._request_project_switch(
+                        lambda: self._open_project_path(path)
+                    )
+                )
+                continue
+            status = "이동·삭제됨" if entry.status is RecentProjectStatus.MISSING else "접근 불가"
+            submenu = self.recent_menu.addMenu(f"{entry.name} · {status}")
+            detail = submenu.addAction(entry.path)
+            detail.setEnabled(False)
+            remove = submenu.addAction("목록에서 제거")
+            remove.triggered.connect(
+                lambda _checked=False, path=entry.path: self._remove_recent_project(path)
+            )
+
+    def _refresh_start_recent(self) -> None:
+        if not hasattr(self, "start_recent"):
+            return
+        entry = next(
+            (
+                item
+                for item in self.controller.recent_projects
+                if item.status is RecentProjectStatus.AVAILABLE
+            ),
+            None,
+        )
+        if entry is None:
+            self.start_recent.setText("최근 프로젝트 없음")
+            self.start_recent.setToolTip("성공적으로 저장하거나 연 프로젝트가 여기에 표시됩니다")
+            self.start_recent.setEnabled(False)
+            return
+        self.start_recent.setText(f"최근 프로젝트 · {entry.name}")
+        self.start_recent.setToolTip(entry.path)
+        self.start_recent.setEnabled(True)
+
+    def _open_start_recent(self) -> None:
+        entry = next(
+            (
+                item
+                for item in self.controller.recent_projects
+                if item.status is RecentProjectStatus.AVAILABLE
+            ),
+            None,
+        )
+        if entry is not None:
+            self._request_project_switch(lambda: self._open_project_path(entry.path))
+
+    def _remove_recent_project(self, path: str) -> None:
+        self.controller.remove_recent_project(path)
+        self._refresh_recent_menu()
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("주요 명령")
@@ -1290,7 +1408,7 @@ class MainWindow(QMainWindow):
         title_suffix = " *" if state.is_dirty else ""
         self.setWindowTitle(
             f"{state.project_name}{title_suffix} — Movie Maker Reproduction · "
-            "W-08 고급 타임라인"
+            "자동 저장·복구"
         )
         self.preview_stack.setCurrentIndex(0 if not state.assets else 1)
         self._refresh_library()
@@ -1300,16 +1418,29 @@ class MainWindow(QMainWindow):
         self._refresh_inspector()
         self._refresh_actions()
         self._refresh_export_panel()
-        proxy_count = sum(asset.proxy_enabled for asset in state.assets.values())
+        proxy_count = sum(asset.proxy_path is not None for asset in state.assets.values())
+        mock_proxy_count = sum(
+            asset.proxy_enabled and asset.proxy_path is None for asset in state.assets.values()
+        )
+        queued_count = sum(
+            asset.thumbnail_status in {"대기 중", "생성 중"}
+            or asset.proxy_status in {"대기 중", "생성 중"}
+            or asset.waveform_status in {"대기 중", "생성 중"}
+            for asset in state.assets.values()
+        )
         if state.export_state in {ExportState.RUNNING, ExportState.CANCELLING}:
             background_summary = f"동영상 저장 {state.export_progress}%"
+        elif queued_count:
+            background_summary = f"백그라운드 작업 {queued_count}개"
         elif proxy_count:
-            background_summary = f"목업 프록시 {proxy_count}개 준비됨"
+            background_summary = f"프록시 {proxy_count}개 준비됨"
+        elif mock_proxy_count:
+            background_summary = f"목업 프록시 {mock_proxy_count}개 준비됨"
         else:
             background_summary = "백그라운드 작업 없음"
         self.status_summary.setText(
             f"길이 {format_time(state.total_duration_ms)} · "
-            f"{background_summary} · 미디어 분석·편집·미리 보기·MP4 출력 실제"
+            f"{background_summary} · 자동 저장 {state.autosave_status}"
         )
         if state.is_playing and not self._preview_timer.isActive():
             self._preview_timer.start()
@@ -1328,6 +1459,8 @@ class MainWindow(QMainWindow):
                 visible = (
                     asset.status is not AssetStatus.READY
                     or asset.thumbnail_error is not None
+                    or "실패"
+                    in {asset.thumbnail_status, asset.waveform_status, asset.proxy_status}
                 )
             elif selected_filter == "전체":
                 visible = True
@@ -1350,10 +1483,13 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, asset.asset_id)
             tooltip = (
                 f"{asset.name}\n{asset.resolution_text}\n{asset.source_path}\n"
-                f"상태: {asset.status.value}"
+                f"상태: {asset.status.value}\n썸네일: {asset.thumbnail_status}\n"
+                f"파형: {asset.waveform_status}\n프록시: {asset.proxy_status}"
             )
             if asset.thumbnail_error is not None:
                 tooltip += f"\n썸네일: {asset.thumbnail_error}"
+            if asset.background_error is not None:
+                tooltip += f"\n작업 오류: {asset.background_error}"
             item.setToolTip(tooltip)
             self.library_list.addItem(item)
             if asset.asset_id == selected_id:
@@ -1367,12 +1503,30 @@ class MainWindow(QMainWindow):
             self.library_empty.setText(f"‘{selected_filter}’ 필터에 해당하는 항목이 없습니다.")
         self.import_warning.setVisible(state.import_warning is not None)
         self.import_warning.setText(state.import_warning or "")
-        proxy_count = sum(asset.proxy_enabled for asset in state.assets.values())
-        background_summary = (
-            f"목업 프록시 {proxy_count}개 준비됨"
-            if proxy_count
-            else "백그라운드 작업 없음"
+        proxy_count = sum(asset.proxy_path is not None for asset in state.assets.values())
+        mock_proxy_count = sum(
+            asset.proxy_enabled and asset.proxy_path is None for asset in state.assets.values()
         )
+        queued_count = sum(
+            asset.thumbnail_status in {"대기 중", "생성 중"}
+            or asset.waveform_status in {"대기 중", "생성 중"}
+            or asset.proxy_status in {"대기 중", "생성 중"}
+            for asset in state.assets.values()
+        )
+        failed_count = sum(
+            "실패" in {asset.thumbnail_status, asset.waveform_status, asset.proxy_status}
+            for asset in state.assets.values()
+        )
+        if queued_count:
+            background_summary = f"작업 중 {queued_count}개"
+        elif failed_count:
+            background_summary = f"작업 실패 {failed_count}개"
+        elif proxy_count:
+            background_summary = f"프록시 {proxy_count}개 준비됨"
+        elif mock_proxy_count:
+            background_summary = f"목업 프록시 {mock_proxy_count}개 준비됨"
+        else:
+            background_summary = "백그라운드 작업 없음"
         self.library_count.setText(f"{total}개 항목 · {background_summary}")
 
     def _refresh_timeline(self) -> None:
@@ -1495,7 +1649,7 @@ class MainWindow(QMainWindow):
             )
             return
         preview = frame_at_project_time(
-            self.controller.media_project,
+            self.controller.preview_project,
             self.controller.preview_position,
         )
         target = preview.target
@@ -1610,7 +1764,7 @@ class MainWindow(QMainWindow):
 
     def _current_preview_target(self) -> FrameTarget | None:
         return frame_at_project_time(
-            self.controller.media_project,
+            self.controller.preview_project,
             self.controller.preview_position,
         ).target
 
@@ -1723,16 +1877,27 @@ class MainWindow(QMainWindow):
                 "warning" if asset.status is not AssetStatus.READY else "success",
             )
             self.media_proxy_status.setText(f"프록시: {asset.proxy_status}")
+            self.audio_waveform.setText(f"파형: {asset.waveform_status}")
+            self.media_status.setText(
+                f"상태: {asset.status.value}\n썸네일: {asset.thumbnail_status}\n"
+                f"파형: {asset.waveform_status}"
+                + (
+                    f"\n작업 오류: {asset.background_error}"
+                    if asset.background_error is not None
+                    else ""
+                )
+            )
             proxy_available = asset.kind is MediaKind.VIDEO and asset.status is AssetStatus.READY
             self.media_proxy_button.setEnabled(proxy_available)
             self.media_proxy_button.setText(
-                "프록시 사용 해제 · 1.0" if asset.proxy_enabled else "프록시 사용 · 1.0"
+                "프록시 사용 해제" if asset.proxy_enabled else "프록시 사용"
             )
             self.media_proxy_button.setToolTip(
-                "실제 파일 없이 준비 완료 상태만 만드는 목업"
+                "원본 시간축을 유지하는 미리 보기 전용 프록시를 생성합니다"
                 if proxy_available
                 else "정상 상태의 영상 미디어를 선택하세요"
             )
+            self.media_cache_button.setEnabled(asset.is_real_media and asset.status is AssetStatus.READY)
             return
         if self._showing_transition and clip is not None and clip.track is TrackKind.VISUAL:
             index = state.visual_clips.index(clip)
@@ -2382,6 +2547,7 @@ class MainWindow(QMainWindow):
                 self.controller.report_status("프로젝트 저장을 취소했습니다")
                 return False
         if self.controller.save_project(target):
+            self._refresh_recent_menu()
             return True
         self._show_project_error("프로젝트를 저장하지 못했습니다")
         return False
@@ -2391,8 +2557,13 @@ class MainWindow(QMainWindow):
         if path is None:
             self.controller.report_status("프로젝트 열기를 취소했습니다")
             return
+        self._open_project_path(path)
+
+    def _open_project_path(self, path: str) -> None:
         if not self.controller.open_project(path):
             self._show_project_error("프로젝트를 열지 못했습니다")
+            return
+        self._refresh_recent_menu()
 
     def _show_project_error(self, heading: str) -> None:
         detail = self.controller.last_persistence_error or "파일을 확인하고 다시 시도하세요."
@@ -2415,7 +2586,7 @@ class MainWindow(QMainWindow):
         return files
 
     def _import_media(self) -> None:
-        self.controller.import_media_files(tuple(self._media_file_selector()))
+        self.controller.request_media_import(tuple(self._media_file_selector()))
         self.library_filter.setCurrentText("전체")
 
     def _request_remove_asset(self) -> None:
@@ -2597,14 +2768,68 @@ class MainWindow(QMainWindow):
             self.controller.report_status("완성 파일의 폴더를 열었습니다")
         self.controller.close_export_result()
 
+    def _request_relink_selected(self) -> None:
+        asset = self.controller.selected_asset
+        if asset is not None and not asset.is_real_media:
+            self.controller.relink_selected_asset()
+            return
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "원본 미디어 다시 연결",
+            "",
+            MEDIA_FILE_FILTER,
+        )
+        if not path:
+            self.controller.report_status("원본 다시 연결을 취소했습니다")
+            return
+        if self.controller.request_relink_selected_asset_to(path):
+            return
+        result = self.controller.last_relink_result
+        if not isinstance(result, RelinkFailure):
+            return
+        if result.code is not RelinkErrorCode.CONFIRMATION_REQUIRED:
+            return
+        differences = "\n".join(result.comparison.differences) if result.comparison else ""
+        dialog = DecisionDialog(
+            title="원본 차이 확인",
+            heading="선택한 파일에 확인이 필요한 차이가 있습니다",
+            body=f"{differences}\n클립 ID와 편집점을 유지한 채 이 파일을 연결할까요?",
+            actions=[
+                (
+                    "차이를 확인하고 연결",
+                    lambda: self.controller.relink_selected_asset_to(path, confirmed=True),
+                    False,
+                ),
+                ("취소", self.controller.cancel_pending_relink_confirmation, True),
+            ],
+            parent=self,
+        )
+        self._show_dialog(dialog)
+
+    def _show_relink_confirmation(self, _path: str, differences: object) -> None:
+        detail = "\n".join(str(item) for item in differences) if isinstance(
+            differences, tuple
+        ) else str(differences)
+        dialog = DecisionDialog(
+            title="원본 차이 확인",
+            heading="선택한 파일에 확인이 필요한 차이가 있습니다",
+            body=f"{detail}\n클립 ID와 편집점을 유지한 채 이 파일을 연결할까요?",
+            actions=[
+                ("차이를 확인하고 연결", self.controller.confirm_pending_relink, False),
+                ("취소", self.controller.cancel_pending_relink_confirmation, True),
+            ],
+            parent=self,
+        )
+        self._show_dialog(dialog)
+
     def _inject_and_show_missing(self) -> None:
         self.controller.inject_missing_media()
         dialog = MissingMediaDialog(self.controller.state, self)
-        dialog.relink_requested.connect(self.controller.relink_selected_asset)
+        dialog.relink_requested.connect(self._request_relink_selected)
         self._show_dialog(dialog)
 
     def _open_recovery(self) -> None:
-        dialog = RecoveryDialog(self)
+        dialog = RecoveryDialog(self, candidate=self.controller.pending_recovery)
         dialog.choice_made.connect(self._handle_recovery_choice)
         self._show_dialog(dialog)
 
@@ -2648,14 +2873,23 @@ class MainWindow(QMainWindow):
     # Native window events and presentation
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls() and dropped_media_paths(event.mimeData().urls()):
+            event.acceptProposedAction()
+            return
         event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        if event.mimeData().hasUrls():
-            self.controller.report_status(
-                "드래그 앤 드롭 가져오기는 1.0 범위입니다 · 가져오기 버튼을 사용하세요"
-            )
-        event.ignore()
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
+        paths = dropped_media_paths(event.mimeData().urls())
+        if not paths:
+            self.controller.report_status("드롭한 항목에 지원하는 미디어 파일이 없습니다")
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.controller.request_media_import(paths)
+        self.library_filter.setCurrentText("전체")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._export_bridge.active:
@@ -2677,10 +2911,12 @@ class MainWindow(QMainWindow):
             return
         if self._allow_close or not self.controller.state.is_dirty:
             self._preview_timer.stop()
+            self._maintenance_timer.stop()
             self._preview_bridge.close()
             self._audio_bridge.close()
             self._audio_output.close()
             self._export_bridge.close()
+            self.controller.close_runtime(clean_exit=True)
             event.accept()
             return
         event.ignore()

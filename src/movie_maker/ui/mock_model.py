@@ -58,6 +58,12 @@ class MockAsset:
     status: AssetStatus = AssetStatus.READY
     proxy_enabled: bool = False
     proxy_status: str = "사용 안 함"
+    proxy_path: str | None = None
+    waveform_status: str = "대기"
+    waveform_path: str | None = None
+    thumbnail_status: str = "대기"
+    stream_summary: str = "알 수 없음"
+    background_error: str | None = None
     thumbnail_png: bytes | None = None
     thumbnail_error: str | None = None
     is_real_media: bool = False
@@ -143,6 +149,7 @@ class MockProjectState:
     export_result_path: str | None = None
     export_stage: str = "encoding"
     import_warning: str | None = None
+    autosave_status: str = "사용 안 함"
     status_message: str = "준비됨 · 인터랙티브 목업"
 
     @property

@@ -277,7 +277,7 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 - 페이드 합이 클립보다 길면 적용하지 않고 이유를 표시한다.
 - 세 버스 값과 개별 클립 값은 공통 오디오 그래프에서 결정적인 순서로 곱한다.
 - 내레이션 구간의 음악 더킹은 200 ms attack, 500 ms release와 선택 강도를 사용한다.
-- 파형은 없다고 명시하며 실제 파형·프록시 생성은 W-10으로 남긴다.
+- 파형은 실제 샘플의 min/max 요약을 사용하고 프록시는 미리 보기에만 적용한다.
 
 자동 검증: `test_record_pause_resume_finish_publishes_one_verified_wav`,
 `test_cancel_and_backend_failure_remove_unique_temporary_file`,
@@ -331,15 +331,17 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 
 1. `누락 미디어 추가`를 실행한다.
 2. 보관함 배지, 속성 상태와 누락 미디어 화면을 확인한다.
-3. 누락 상태로 열기와 1.0 다시 연결을 각각 수행한다.
+3. 누락 상태로 열기와 실제 파일 다시 연결을 각각 수행한다.
 
 합격 기준:
 
-- 마지막 경로, 영향을 받는 클립 수와 가능한 다음 행동을 함께 표시한다.
+- 마지막 경로, 종류·길이·화면 크기·스트림, 영향을 받는 클립 수와 다음 행동을 표시한다.
 - 누락 상태에서도 프로젝트 구조와 편집점은 보존한다.
-- 잘못된 원본을 조용히 연결하지 않는 실제 검증 경계를 명세에 남긴다.
+- ffprobe 비교가 exact, confirm, mismatch를 구분하고 잘못된 원본을 조용히 연결하지 않는다.
 
-자동 검증: `test_missing_media_and_partial_failure_remain_visible_and_recoverable`.
+자동 검증: `test_exact_relink_is_one_command_and_preserves_clips_and_edit_points`,
+`test_difference_requires_confirmation_and_mismatch_changes_nothing`,
+`test_missing_media_dialog_lists_identity_and_clip_impact`.
 
 ### V-ERROR-02: 부분 가져오기 실패
 
@@ -357,7 +359,8 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 - 보관함 전체가 비었다는 상태와 필터 결과가 없다는 상태를 구분한다.
 
 자동 검증: `test_mixed_batch_keeps_video_photo_audio_successes_and_file_failures`,
-`test_main_window_import_action_uses_selected_files_and_shows_failures`.
+`test_main_window_import_action_uses_selected_files_and_shows_failures`,
+`test_drop_path_expansion_is_one_level_bounded_and_skips_hidden`.
 
 ### V-ERROR-03: 출력 실패와 재시도
 
@@ -383,15 +386,18 @@ uv --managed-python run --locked --no-sync -- python scripts/mock/capture_mock.p
 1. 자동 저장 복구 화면에서 두 저장 시점과 변경 요약을 비교한다.
 2. 자동 저장본, 정상 저장본과 나중에 결정 경로를 확인한다.
 3. 더 새 버전 프로젝트 오류에서 원본을 바꾸지 않은 상태와 필요한 앱 버전을 확인한다.
-4. 런타임 화면에서 환경 상태, 로그, 복구, 옵션, 실행과 유지관리 진입을 확인한다.
+4. 손상 또는 더 새 스키마 자동 저장본이 격리되고 현재 프로젝트가 유지되는지 확인한다.
 
 합격 기준:
 
 - 복구본은 정상 저장본을 즉시 덮어쓰지 않는다.
-- 런타임 화면은 실제 편집기와 별도 책임을 유지한다.
-- 목업 버튼은 설치, 실행 또는 파일 변경을 실제 수행했다고 주장하지 않는다.
+- 비정상 종료에서만 완전한 최신 generation을 후보로 제시하고 세 선택의 상태를 구분한다.
+- 자동 저장 실패와 종료 정리가 정상 프로젝트와 이전 완전본을 손상시키지 않는다.
 
-자동 검증: `test_mock_state_actions_open_named_supporting_screens`.
+자동 검증: `test_generation_saved_during_new_edit_remains_pending`,
+`test_unclean_session_discovers_candidate_and_choices_preserve_files`,
+`test_corrupt_and_newer_schema_autosaves_are_quarantined`,
+`test_failed_autosave_keeps_previous_complete_generation`.
 
 ## 레이아웃·키보드·접근성
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
+from functools import partial
 from importlib.metadata import version
 
 import numpy
@@ -15,7 +16,10 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication
 
 from movie_maker import __version__
+from movie_maker.media import MediaLibrary
+from movie_maker.runtime import W10Runtime
 from movie_maker.ui.main_window import MainWindow
+from movie_maker.ui.mock_controller import MockController
 
 
 def create_application(arguments: Sequence[str] | None = None) -> QApplication:
@@ -60,6 +64,15 @@ def run(*, check_only: bool = False) -> int:
         print("\n".join(runtime_report()))
         return 0
 
-    window = MainWindow()
+    runtime: W10Runtime | None = None
+    try:
+        runtime = W10Runtime.create()
+    except (OSError, RuntimeError, ValueError):
+        # App-owned recovery metadata must never prevent direct project editing.
+        runtime = None
+    library = MediaLibrary.create_background_default() if runtime is not None else None
+    window = MainWindow(MockController(media_library=library, runtime=runtime))
+    if runtime is not None:
+        app.aboutToQuit.connect(partial(runtime.close, clean_exit=True))
     window.show()
     return app.exec()

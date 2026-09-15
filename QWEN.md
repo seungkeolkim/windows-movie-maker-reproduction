@@ -20,9 +20,9 @@
   불변 프로젝트 값 + 명령 실행 경계(ADR-0002)가 undo/redo와 복구의 기반입니다.
 - **고정 트랙 구조:** 비디오/사진, 음악, 내레이션, 텍스트 레이어, 전환(인접 장면 사이만).
   무제한 영상 레이어는 1.0 범위에 포함하지 않습니다.
-- **현재 진행 상황:** W-01~W-09 완료(프로젝트 코어, 미디어 보관함, 저장/열기, 타임라인 편집,
-  미리 보기, 원본음·음악 믹싱, MP4 출력, 고급 타임라인, 창작 기능). 다음 작업은 W-10
-  (복구·백그라운드 작업)이고, 이후 W-11(Windows 런처·설치)을 진행합니다. 명세는 `tasks/`에
+- **현재 진행 상황:** W-01~W-10 완료(프로젝트 코어, 미디어 보관함, 저장/열기, 타임라인 편집,
+  미리 보기, 원본음·음악 믹싱, MP4 출력, 고급 타임라인, 창작 기능, 복구·백그라운드 작업).
+  다음 작업은 W-11(Windows 런처·설치)입니다. 명세는 `tasks/`에
   있습니다.
 
 ## 실행 환경 구성
@@ -65,8 +65,8 @@ FFmpeg 탐색 순서: 스크립트 인자 → `MOVIE_MAKER_FFMPEG_DIR` 환경 �
 
 ```text
 src/movie_maker/        # 애플리케이션 코드
-├── project/            # W-01 시간·클립 모델, W-03 원자적 JSON 저장(persistence.py)
-├── media/              # W-02 ffprobe 분석, 썸네일, 보관함
+├── project/            # 코어·JSON 저장, W-10 자동 저장·복구·최근 프로젝트
+├── media/              # ffprobe 분석, 보관함, W-10 작업 큐·캐시·프록시
 ├── timeline/           # W-04 편집 명령, W-08 advanced.py(복제·다중 선택·그룹)
 ├── preview/            # W-05 실제 시간축 재생, FFmpeg 디코딩
 ├── audio/              # W-06 원본음·음악 믹싱, 48kHz 스테레오 공통 그래프
@@ -77,7 +77,7 @@ scripts/environment/    # setup/run 스크립트(Windows PowerShell + Linux Bash
 scripts/mock/           # 목업 기준 화면 캡처
 tests/                  # 소스 패키지 구조를 거울처럼 반영(test_timeline_split.py 등)
 docs/                   # 번호 매긴 문서 — 진입점은 docs/README.md
-tasks/                  # W-06~W-11 독립 실행용 작업 명세(다음 작업: W-10)
+tasks/                  # W-06~W-11 독립 실행용 작업 명세(다음 작업: W-11)
 codex_goals/            # 작업별 목표 파일(txt)
 ```
 
@@ -130,7 +130,7 @@ codex_goals/            # 작업별 목표 파일(txt)
 
 ## 작업 진행 방식
 
-- 다음 작업은 `tasks/w-10-recovery-and-background-jobs.md`부터 시작하며, 각 명세 파일 전체가
+- 다음 작업은 `tasks/w-11-windows-launcher-and-installer.md`이며, 각 명세 파일 전체가
   작업 목표입니다.
 - 후속 작업은 선행 작업의 공개 계약을 재사용하며 선행 기능을 임시 구현으로 복제하지 않습니다.
 - 요구사항 해석 시 제품 범위(`docs/product/`)와 승인된 ADR을 우선합니다.

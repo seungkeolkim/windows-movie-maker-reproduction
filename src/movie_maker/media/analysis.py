@@ -163,6 +163,15 @@ class FfprobeAnalyzer:
         self._timeout_seconds = timeout_seconds
         self._runner = runner
 
+    def with_runner(self, runner: ProcessRunner) -> FfprobeAnalyzer:
+        """Clone this analyzer with the same executable and timeout at another process boundary."""
+
+        return FfprobeAnalyzer(
+            self._executable,
+            timeout_seconds=self._timeout_seconds,
+            runner=runner,
+        )
+
     def analyze(self, source_path: str | os.PathLike[str]) -> MediaAnalysisResult:
         """Return a typed result; expected per-file failures never escape."""
 

@@ -163,9 +163,25 @@ class MediaLibrary:
 
         return cls(CommandExecutor(_new_project()), FfprobeAnalyzer(), FfmpegThumbnailer())
 
+    @classmethod
+    def create_background_default(cls) -> MediaLibrary:
+        """Create a runtime library whose regenerable artifacts use the W-10 queue."""
+
+        return cls(CommandExecutor(_new_project()), FfprobeAnalyzer(), None)
+
     @property
     def project(self) -> Project:
         return self._executor.project
+
+    @property
+    def executor(self) -> CommandExecutor:
+        """Expose the shared command boundary to W-10 services."""
+
+        return self._executor
+
+    @property
+    def analyzer(self) -> MediaAnalyzer:
+        return self._analyzer
 
     @property
     def history_count(self) -> int:
@@ -324,6 +340,70 @@ class MediaLibrary:
             failures=tuple(failures),
             duplicates=tuple(duplicates),
             thumbnail_failures=tuple(thumbnail_failures),
+        )
+
+    def import_analyzed(self, results: Sequence[MediaAnalysisResult]) -> MediaImportReport:
+        """Commit analysis produced off the UI thread through the same command boundary."""
+
+        if not results:
+            return MediaImportReport(cancelled=True)
+        imported: list[ImportedMedia] = []
+        failures: list[MediaImportFailure] = []
+        duplicates: list[DuplicateMedia] = []
+        thumbnail_failures: list[ThumbnailFailure] = []
+        existing_paths = self._existing_paths()
+        for result in results:
+            if isinstance(result, MediaAnalysisFailure):
+                failures.append(_analysis_failure(result))
+                continue
+            if not isinstance(result, MediaAnalysisSuccess):
+                failures.append(
+                    MediaImportFailure(
+                        "",
+                        MediaImportErrorCode.INTERNAL_ERROR,
+                        "미디어 분석기가 올바른 결과를 반환하지 않았습니다.",
+                    )
+                )
+                continue
+            analysis = result.analysis
+            source_key = canonical_source_key(analysis.source_path)
+            existing_asset_id = existing_paths.get(source_key)
+            if existing_asset_id is not None:
+                duplicates.append(DuplicateMedia(analysis.source_path, existing_asset_id))
+                continue
+            asset_id = self._asset_id_factory()
+            try:
+                reference = analysis.to_media_reference(asset_id)
+                self._executor.execute(InsertMediaReference(reference))
+            except (CommandError, ProjectValidationError, TypeError, ValueError) as error:
+                failures.append(
+                    MediaImportFailure(
+                        analysis.source_path,
+                        MediaImportErrorCode.COMMAND_REJECTED,
+                        "분석 결과를 프로젝트에 추가하지 못했습니다.",
+                        str(error),
+                    )
+                )
+                continue
+            thumbnail: ThumbnailSuccess | None = None
+            if self._thumbnailer is not None and analysis.kind in {
+                MediaKind.VIDEO,
+                MediaKind.PHOTO,
+            }:
+                thumbnail_result = self._create_thumbnail(analysis)
+                if isinstance(thumbnail_result, ThumbnailSuccess):
+                    thumbnail = thumbnail_result
+                    self._thumbnails[asset_id] = thumbnail_result
+                else:
+                    thumbnail_failures.append(thumbnail_result)
+                    self._thumbnail_failures[asset_id] = thumbnail_result
+            imported.append(ImportedMedia(reference, thumbnail))
+            existing_paths[source_key] = asset_id
+        return MediaImportReport(
+            tuple(imported),
+            tuple(failures),
+            tuple(duplicates),
+            tuple(thumbnail_failures),
         )
 
     def remove(self, asset_id: str) -> MediaRemovalResult:

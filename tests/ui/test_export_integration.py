@@ -234,6 +234,25 @@ def test_real_export_bridge_uses_snapshot_allows_editing_and_opens_result(
     assert window.controller.state.export_state is ExportState.CLOSED
 
 
+def test_export_uses_original_even_when_preview_proxy_is_ready(tmp_path: Path, qtbot) -> None:
+    runner = _ControlledRunner()
+    window = _window(tmp_path, qtbot, runner)
+    proxy = tmp_path / "preview.proxy.mp4"
+    proxy.write_bytes(b"proxy")
+    asset = window.controller.state.assets["video"]
+    asset.proxy_enabled = True
+    asset.proxy_path = str(proxy)
+    original = window.controller.media_project.media_reference("video").source_path
+
+    assert window.controller.preview_project.media_reference("video").source_path == str(proxy)
+    window._begin_export(str(tmp_path / "result.mp4"), "원본 유지", "30 fps", "권장")
+    assert runner.started.wait(1.0)
+
+    assert runner.plan.project.media_reference("video").source_path == original
+    runner.release.set()
+    qtbot.waitUntil(lambda: window.controller.state.export_state is ExportState.COMPLETE)
+
+
 def test_duplicate_start_is_rejected_without_replacing_active_settings(
     tmp_path: Path,
     qtbot,

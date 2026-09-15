@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
 )
 
 from movie_maker.creative import NarrationRecordingCoordinator
-from movie_maker.ui.dialogs import ExportSettingsDialog, NarrationDialog
-from movie_maker.ui.main_window import MainWindow
+from movie_maker.ui.dialogs import ExportSettingsDialog, MissingMediaDialog, NarrationDialog
+from movie_maker.ui.main_window import MainWindow, dropped_media_paths
 from movie_maker.ui.mock_model import ExportState
 
 
@@ -148,6 +148,44 @@ def test_detailed_mvp_and_one_zero_controls_exist_in_context(qtbot) -> None:
     qtbot.mouseClick(proxy_button, Qt.MouseButton.LeftButton)
     assert "준비됨" in window.media_proxy_status.text()
     assert "목업 프록시 1개" in window.library_count.text()
+
+
+def test_media_inspector_exposes_manual_cache_regeneration(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert window.findChild(QPushButton, "E-MEDIA-CACHE-REGENERATE") is not None
+
+
+def test_drop_path_expansion_is_one_level_bounded_and_skips_hidden(tmp_path) -> None:
+    folder = tmp_path / "drop"
+    folder.mkdir()
+    visible = folder / "visible.mp4"
+    hidden = folder / ".hidden.mp4"
+    nested = folder / "nested"
+    nested.mkdir()
+    nested_file = nested / "nested.mp4"
+    visible.write_bytes(b"v")
+    hidden.write_bytes(b"h")
+    nested_file.write_bytes(b"n")
+
+    paths = dropped_media_paths((QUrl.fromLocalFile(str(folder)),))
+
+    assert str(visible.resolve()) in paths
+    assert str(hidden.resolve()) not in paths
+    assert str(nested_file.resolve()) not in paths
+
+
+def test_missing_media_dialog_lists_identity_and_clip_impact(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.controller.inject_missing_media()
+    dialog = MissingMediaDialog(window.controller.state)
+    qtbot.addWidget(dialog)
+
+    text = dialog.items.item(0).text()
+    assert "종류:" in text
+    assert "스트림:" in text
+    assert "영향 받는 클립:" in text
 
 
 class _NoInputDeviceBackend:

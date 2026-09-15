@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -31,6 +32,7 @@ from movie_maker.creative import (
     RecordingSnapshot,
     RecordingState,
 )
+from movie_maker.project import RecoveryCandidate
 from movie_maker.ui.mock_model import MockProjectState
 from movie_maker.ui.narration import FfmpegInputDeviceBackend
 
@@ -224,7 +226,7 @@ class DecisionDialog(QDialog):
 
 
 class MissingMediaDialog(QDialog):
-    """S-MISSING-MEDIA showing impact and a mock relink route."""
+    """S-MISSING-MEDIA showing stored identity, impact, and a relink route."""
 
     relink_requested = Signal()
 
@@ -239,8 +241,8 @@ class MissingMediaDialog(QDialog):
         heading.setObjectName("dialogHeading")
         layout.addWidget(heading)
         body = QLabel(
-            "프로젝트 구조와 편집점은 유지됩니다. MVP에서는 누락 상태로 열 수 있고, "
-            "1.0에서는 새 원본을 다시 연결할 수 있습니다."
+            "프로젝트 구조와 편집점은 유지됩니다. 새 원본은 종류, 길이, 화면 크기와 "
+            "스트림을 분석해 일치 여부를 확인한 뒤 연결합니다."
         )
         body.setWordWrap(True)
         body.setObjectName("secondaryText")
@@ -250,14 +252,19 @@ class MissingMediaDialog(QDialog):
         missing = [asset for asset in state.assets.values() if asset.status.value != "준비됨"]
         for asset in missing:
             affected = sum(clip.asset_id == asset.asset_id for clip in state.all_clips)
+            duration = (
+                "길이 없음" if asset.duration_ms is None else f"{asset.duration_ms / 1000:.3f}초"
+            )
             self.items.addItem(
-                f"⚠ {asset.name}\n마지막 위치: {asset.source_path}\n영향 받는 클립: {affected}개"
+                f"⚠ {asset.name}\n마지막 위치: {asset.source_path}\n"
+                f"종류: {asset.kind.value} · {duration} · {asset.resolution_text}\n"
+                f"스트림: {asset.stream_summary}\n영향 받는 클립: {affected}개"
             )
         if not missing:
             self.items.addItem("현재 누락되거나 읽기 오류인 미디어가 없습니다.")
         layout.addWidget(self.items)
         buttons = QHBoxLayout()
-        relink = QPushButton("선택 파일 다시 연결 · 1.0")
+        relink = QPushButton("선택 파일 다시 연결")
         relink.setObjectName("E-MISSING-RELINK")
         relink.setEnabled(bool(missing))
         relink.clicked.connect(self.relink_requested.emit)
@@ -277,14 +284,19 @@ class MissingMediaDialog(QDialog):
 
 
 class RecoveryDialog(QDialog):
-    """S-RECOVERY mock comparing normal and automatic saves."""
+    """S-RECOVERY comparing a validated autosave with its normal file."""
 
     choice_made = Signal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        candidate: RecoveryCandidate | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("S-RECOVERY")
-        self.setWindowTitle("프로젝트 복구 · 목업")
+        self.setWindowTitle("프로젝트 복구" if candidate is not None else "프로젝트 복구 · 목업")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setMinimumWidth(520)
         layout = QVBoxLayout(self)
@@ -295,10 +307,28 @@ class RecoveryDialog(QDialog):
         comparison.setObjectName("E-RECOVERY-COMPARISON")
         comparison.setProperty("role", "summary")
         comparison_layout = QVBoxLayout(comparison)
-        comparison_layout.addWidget(QLabel("자동 저장본 · 오늘 14:32 · 분할/삭제 후 3개 변경"))
-        comparison_layout.addWidget(QLabel("정상 저장본 · 오늘 14:26 · 제주 여행 목업"))
+        if candidate is None:
+            automatic_text = "자동 저장본 · 오늘 14:32 · 분할/삭제 후 3개 변경"
+            normal_text = "정상 저장본 · 오늘 14:26 · 제주 여행 목업"
+        else:
+            metadata = candidate.metadata
+            automatic_text = (
+                f"자동 저장본 · {_display_time(metadata.autosaved_at)} · "
+                f"{metadata.change_summary} · 세대 {metadata.generation}"
+            )
+            normal_text = (
+                f"정상 저장본 · {_display_time(metadata.normal_saved_at)} · "
+                f"{metadata.project_name}"
+                if metadata.normal_path is not None
+                else "정상 저장본 · 아직 저장된 파일 없음"
+            )
+        comparison_layout.addWidget(QLabel(automatic_text))
+        comparison_layout.addWidget(QLabel(normal_text))
         layout.addWidget(comparison)
-        note = QLabel("복구본을 선택해도 정상 저장 파일을 즉시 덮어쓰지 않습니다.")
+        note = QLabel(
+            "자동 저장본은 정상 파일을 즉시 덮어쓰지 않습니다. 정상 저장본을 선택하면 "
+            "표시된 복구본을 정리합니다."
+        )
         note.setObjectName("secondaryText")
         layout.addWidget(note)
         row = QHBoxLayout()
@@ -307,19 +337,26 @@ class RecoveryDialog(QDialog):
         auto_button.setDefault(True)
         auto_button.clicked.connect(lambda: self._choose("자동 저장본"))
         row.addWidget(auto_button)
-        normal_button = QPushButton("정상 저장본 열기")
+        normal_button = QPushButton("정상 저장본 열기 · 복구본 정리")
         normal_button.setObjectName("E-RECOVERY-NORMAL")
+        normal_button.setEnabled(candidate is None or candidate.normal_project is not None)
         normal_button.clicked.connect(lambda: self._choose("정상 저장본"))
         row.addWidget(normal_button)
         later_button = QPushButton("나중에 결정")
         later_button.setObjectName("E-RECOVERY-LATER")
-        later_button.clicked.connect(self.reject)
+        later_button.clicked.connect(lambda: self._choose("나중에 결정"))
         row.addWidget(later_button)
         layout.addLayout(row)
 
     def _choose(self, choice: str) -> None:
         self.choice_made.emit(choice)
         self.accept()
+
+
+def _display_time(value: float | None) -> str:
+    if value is None:
+        return "시각 없음"
+    return datetime.fromtimestamp(value).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class NarrationDialog(QDialog):
