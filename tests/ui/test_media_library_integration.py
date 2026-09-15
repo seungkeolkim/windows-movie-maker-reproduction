@@ -1,7 +1,7 @@
 import base64
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWidgets import QDialog, QFileDialog, QLabel, QPushButton
 
 from movie_maker.media import (
@@ -15,6 +15,7 @@ from movie_maker.media import (
     ThumbnailSuccess,
 )
 from movie_maker.project import (
+    ApplicationPaths,
     CommandExecutor,
     FrameRate,
     MediaKind,
@@ -24,8 +25,10 @@ from movie_maker.project import (
     Project,
     ProjectTime,
 )
-from movie_maker.ui.main_window import MainWindow
+from movie_maker.runtime import W10Runtime
+from movie_maker.ui.main_window import MainWindow, dropped_media_paths
 from movie_maker.ui.mock_controller import MockController
+from movie_maker.ui.mock_model import AssetStatus
 
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YA"
@@ -93,7 +96,7 @@ class StubThumbnailer:
         return ThumbnailSuccess(analysis.source_path, PNG_BYTES)
 
 
-def _controller(kinds_by_name, *, failure_names=(), thumbnail_failure_names=()):
+def _controller(kinds_by_name, *, failure_names=(), thumbnail_failure_names=(), runtime=None):
     identifiers = iter(f"real-media-{index}" for index in range(1, 20))
     library = MediaLibrary(
         CommandExecutor(Project.empty(project_id="project-ui")),
@@ -101,7 +104,7 @@ def _controller(kinds_by_name, *, failure_names=(), thumbnail_failure_names=()):
         StubThumbnailer(thumbnail_failure_names),
         asset_id_factory=lambda: next(identifiers),
     )
-    return MockController(library)
+    return MockController(library, runtime=runtime)
 
 
 def test_controller_reports_partial_success_and_populates_core_and_views(tmp_path) -> None:
@@ -138,7 +141,91 @@ def test_controller_reports_partial_success_and_populates_core_and_views(tmp_pat
     assert photo.name in controller.state.import_warning
     assert controller.state.assets["real-media-1"].thumbnail_png == PNG_BYTES
     assert controller.state.assets["real-media-2"].thumbnail_error is not None
-    assert all((source.read_bytes(), source.stat().st_mtime_ns) == before[source] for source in sources)
+    assert all(
+        (source.read_bytes(), source.stat().st_mtime_ns) == before[source]
+        for source in sources
+    )
+
+
+def test_ready_proxy_is_preview_only_and_persistent_project_keeps_original(tmp_path) -> None:
+    source = tmp_path / "original.mp4"
+    proxy = tmp_path / "proxy.mp4"
+    source.write_bytes(b"original")
+    proxy.write_bytes(b"proxy")
+    controller = _controller({source.name: MediaKind.VIDEO})
+    controller.import_media_files((str(source),))
+    asset_id = controller.state.selected_asset_id
+    assert asset_id is not None
+    asset = controller.state.assets[asset_id]
+    asset.proxy_enabled = True
+    asset.proxy_path = str(proxy)
+
+    assert controller.preview_project.media_reference(asset_id).source_path == str(proxy)
+    assert controller.media_project.media_reference(asset_id).source_path == str(source.resolve())
+
+
+def test_runtime_relink_analysis_completes_off_ui_thread(tmp_path) -> None:
+    source = tmp_path / "original.mp4"
+    candidate = tmp_path / "replacement.mp4"
+    source.write_bytes(b"original")
+    candidate.write_bytes(b"replacement")
+    runtime = W10Runtime.create(
+        ApplicationPaths(tmp_path / "data", tmp_path / "cache", tmp_path / "logs")
+    )
+    controller = _controller(
+        {source.name: MediaKind.VIDEO, candidate.name: MediaKind.VIDEO},
+        runtime=runtime,
+    )
+    controller.import_media_files((str(source),))
+    asset_id = controller.state.selected_asset_id
+    assert asset_id is not None
+    controller.state.assets[asset_id].status = AssetStatus.MISSING
+    before_history = controller.media_history_count
+
+    assert controller.request_relink_selected_asset_to(str(candidate))
+    assert controller._pending_relink is not None
+    controller._pending_relink.result(timeout=2)
+    controller.autosave_tick()
+
+    assert controller.media_history_count == before_history + 1
+    assert controller.media_project.media_reference(asset_id).source_path == str(candidate.resolve())
+    controller.close_runtime(clean_exit=True)
+
+
+def test_proxy_toggle_and_manual_cache_regeneration_are_session_only(tmp_path) -> None:
+    source = tmp_path / "cache-source.mp4"
+    source.write_bytes(b"original")
+    runtime = W10Runtime.create(
+        ApplicationPaths(tmp_path / "data", tmp_path / "cache", tmp_path / "logs")
+    )
+    controller = _controller({source.name: MediaKind.VIDEO}, runtime=runtime)
+    controller.import_media_files((str(source),))
+    before_project = controller.media_project
+    before_history = controller.media_history_count
+    before_source = source.read_bytes()
+
+    assert controller.toggle_selected_proxy()
+    assert controller.regenerate_selected_cache()
+    assert controller.media_project == before_project
+    assert controller.media_history_count == before_history
+    assert source.read_bytes() == before_source
+
+    assert controller.toggle_selected_proxy()
+    controller.close_runtime(clean_exit=True)
+
+
+def test_file_picker_and_explorer_drop_use_equivalent_import_boundary(tmp_path) -> None:
+    source = tmp_path / "equivalent.mp4"
+    source.write_bytes(b"source")
+    direct = _controller({source.name: MediaKind.VIDEO})
+    dropped = _controller({source.name: MediaKind.VIDEO})
+
+    direct.import_media_files((str(source),))
+    drop_paths = dropped_media_paths((QUrl.fromLocalFile(str(source)),))
+    dropped.import_media_files(drop_paths)
+
+    assert dropped.media_project == direct.media_project
+    assert dropped.state.import_warning == direct.state.import_warning
 
 
 def test_duplicate_and_cancelled_imports_leave_existing_project_unchanged(tmp_path) -> None:

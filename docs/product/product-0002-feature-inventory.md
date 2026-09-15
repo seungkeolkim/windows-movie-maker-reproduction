@@ -175,7 +175,7 @@ FFmpeg 명령 또는 개별 버튼 수준으로 분해하는 일은 후속 설�
 
 구현 연결: `F-AUDIO-06`~`11`의 지속 값과 실제 서비스 계약은
 [DESIGN-0011](../design/design-0011-creative-features-contract.md)에 있다. `F-AUDIO-05` 실제
-파형 생성은 W-10 범위다.
+파형 생성은 W-10에서 실제 FFmpeg 디코딩과 백그라운드 캐시로 구현됐다.
 
 ## F-TEXT: 제목과 자막
 

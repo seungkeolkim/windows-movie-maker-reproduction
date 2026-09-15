@@ -1,5 +1,6 @@
 """UI-independent project core."""
 
+from movie_maker.project.app_paths import ApplicationPaths
 from movie_maker.project.commands import (
     CommandApplication,
     CommandContractError,
@@ -15,6 +16,7 @@ from movie_maker.project.commands import (
     RemoveClip,
     RemoveMediaReference,
     RenameProject,
+    ReplaceMediaReference,
 )
 from movie_maker.project.model import (
     CURRENT_PROJECT_SCHEMA_VERSION,
@@ -57,8 +59,22 @@ from movie_maker.project.persistence import (
     ProjectReadError,
     ProjectWriteError,
     UnsupportedProjectVersion,
+    migrate_project_document,
     project_from_document,
     project_to_document,
+)
+from movie_maker.project.recent import RecentProject, RecentProjectsStore, RecentProjectStatus
+from movie_maker.project.recovery import (
+    AutosaveCoordinator,
+    AutosaveError,
+    AutosaveMetadata,
+    AutosaveState,
+    AutosaveStore,
+    RecoveryCandidate,
+    RecoveryChoice,
+    RecoveryOpenResult,
+    SessionJournal,
+    SessionMarker,
 )
 from movie_maker.project.time import FrameRate, ProjectTime, TimeRounding
 
@@ -68,7 +84,13 @@ __all__ = [
     "DEFAULT_BRIGHTNESS",
     "DEFAULT_MIXER_SETTINGS",
     "DEFAULT_TEXT_STYLE",
+    "ApplicationPaths",
     "AudioLevel",
+    "AutosaveCoordinator",
+    "AutosaveError",
+    "AutosaveMetadata",
+    "AutosaveState",
+    "AutosaveStore",
     "Brightness",
     "Canvas",
     "Clip",
@@ -102,9 +124,18 @@ __all__ = [
     "ProjectTime",
     "ProjectValidationError",
     "ProjectWriteError",
+    "RecentProject",
+    "RecentProjectStatus",
+    "RecentProjectsStore",
+    "RecoveryCandidate",
+    "RecoveryChoice",
+    "RecoveryOpenResult",
     "RemoveClip",
     "RemoveMediaReference",
     "RenameProject",
+    "ReplaceMediaReference",
+    "SessionJournal",
+    "SessionMarker",
     "TextAlignment",
     "TextAnimationPreset",
     "TextKind",
@@ -118,6 +149,7 @@ __all__ = [
     "UnsupportedProjectVersion",
     "UserRotation",
     "VisualEffectPreset",
+    "migrate_project_document",
     "project_from_document",
     "project_to_document",
 ]

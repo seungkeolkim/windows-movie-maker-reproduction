@@ -9,7 +9,7 @@ def test_main_window_exposes_interactive_mock_workspace(qtbot) -> None:
     window.show()
 
     assert "Movie Maker Reproduction" in window.windowTitle()
-    assert "W-08 고급 타임라인" in window.windowTitle()
+    assert "자동 저장·복구" in window.windowTitle()
     assert window.objectName() == "S-EDITOR"
     assert window.minimumWidth() == 1024
     assert window.minimumHeight() == 640

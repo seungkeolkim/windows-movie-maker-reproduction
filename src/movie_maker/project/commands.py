@@ -207,6 +207,39 @@ class RemoveMediaReference:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplaceMediaReference:
+    """Atomically replace metadata for one asset while preserving its identity."""
+
+    replacement: MediaReference
+    expected: MediaReference | None = None
+
+    @property
+    def label(self) -> str:
+        return "미디어 다시 연결"
+
+    def apply(self, project: Project) -> CommandApplication:
+        try:
+            current = project.media_reference(self.replacement.asset_id)
+        except KeyError as error:
+            raise CommandRejected("The media reference does not exist.") from error
+        if self.expected is not None and current != self.expected:
+            raise CommandRejected("The media reference changed since relinking was prepared.")
+        if current == self.replacement:
+            raise CommandRejected("The replacement media reference is unchanged.")
+
+        index = project.media.index(current)
+        media = (*project.media[:index], self.replacement, *project.media[index + 1 :])
+        try:
+            next_project = replace(project, media=media)
+        except ProjectValidationError as error:
+            raise CommandRejected(str(error)) from error
+        return CommandApplication(
+            next_project,
+            ReplaceMediaReference(current, expected=self.replacement),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class InsertClip:
     """Insert a clip and maintain the fixed track's ordering invariants."""
 

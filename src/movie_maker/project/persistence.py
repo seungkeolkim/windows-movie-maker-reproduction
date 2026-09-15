@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -400,7 +401,7 @@ def project_from_document(value: object) -> Project:
     """Parse and fully validate an in-memory JSON project value."""
 
     try:
-        document = _mapping(value, "project")
+        document = migrate_project_document(value)
         schema_version = _integer(
             _required(document, "schema_version", "project"), "project.schema_version"
         )
@@ -519,6 +520,24 @@ def project_from_document(value: object) -> Project:
         raise
     except (TypeError, ValueError, ProjectValidationError) as error:
         raise InvalidProjectDocument(str(error)) from error
+
+
+def migrate_project_document(value: object) -> Mapping[str, object]:
+    """Migrate a detached document copy through each supported historic schema."""
+
+    document = dict(_mapping(deepcopy(value), "project"))
+    schema_version = _integer(
+        _required(document, "schema_version", "project"), "project.schema_version"
+    )
+    if schema_version < 0 or schema_version > CURRENT_PROJECT_SCHEMA_VERSION:
+        raise UnsupportedProjectVersion(f"Unsupported project schema version: {schema_version}.")
+    while schema_version < CURRENT_PROJECT_SCHEMA_VERSION:
+        if schema_version == 0:
+            document["schema_version"] = 1
+            schema_version = 1
+            continue
+        raise UnsupportedProjectVersion(f"Unsupported project schema version: {schema_version}.")
+    return document
 
 
 class ProjectFileStore:

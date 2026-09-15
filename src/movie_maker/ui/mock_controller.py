@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import wave
 from collections.abc import Callable, Sequence
+from concurrent.futures import Future
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from itertools import count
 from pathlib import Path
+from threading import Event
 from time import monotonic_ns
 from uuid import uuid4
 
@@ -24,14 +26,31 @@ from movie_maker.creative import (
     UpdateVisualProperties,
 )
 from movie_maker.media import (
+    CacheKind,
+    FfprobeAnalyzer,
     ImportedMedia,
+    JobHandle,
+    JobPriority,
+    JobState,
+    MediaAnalysis,
+    MediaAnalysisErrorCode,
+    MediaAnalysisFailure,
+    MediaAnalysisResult,
     MediaImportReport,
     MediaLibrary,
+    MediaRelinker,
     MediaRemovalFailure,
+    RelinkComparison,
+    RelinkErrorCode,
+    RelinkFailure,
+    RelinkMatch,
+    RelinkSuccess,
 )
+from movie_maker.media.process import run_cancellable_process
 from movie_maker.preview import PlaybackClock, ui_milliseconds
 from movie_maker.project import (
     AudioLevel,
+    AutosaveState,
     Brightness,
     Canvas,
     Clip,
@@ -50,6 +69,9 @@ from movie_maker.project import (
     ProjectFileStore,
     ProjectPersistenceError,
     ProjectTime,
+    RecentProject,
+    RecoveryCandidate,
+    RecoveryChoice,
     RenameProject,
     TextAlignment,
     TextAnimationPreset,
@@ -64,6 +86,7 @@ from movie_maker.project import (
 )
 from movie_maker.project.model import MediaKind as CoreMediaKind
 from movie_maker.project.model import TrackKind as CoreTrackKind
+from movie_maker.runtime import W10Runtime
 from movie_maker.timeline import (
     AddMediaClip,
     DeleteClipGroup,
@@ -229,6 +252,16 @@ def _source_name(source_path: str) -> str:
     return Path(source_path).name or source_path
 
 
+def _stream_summary(reference: MediaReference) -> str:
+    parts = []
+    for stream in reference.streams:
+        detail = f"{stream.kind.value} · {stream.codec_name or '코덱 미상'}"
+        if stream.sample_rate is not None:
+            detail += f" · {stream.sample_rate} Hz"
+        parts.append(detail)
+    return ", ".join(parts) or "스트림 정보 없음"
+
+
 def _import_warning_text(report: MediaImportReport) -> str | None:
     lines: list[str] = []
     for import_failure in report.failures:
@@ -315,12 +348,14 @@ class MockController(QObject):
     state_changed = Signal()
     status_changed = Signal(str)
     export_changed = Signal()
+    relink_confirmation_requested = Signal(str, object)
 
     def __init__(
         self,
         media_library: MediaLibrary | None = None,
         project_store: ProjectFileStore | None = None,
         *,
+        runtime: W10Runtime | None = None,
         clip_id_factory: Callable[[], str] | None = None,
         playback_clock_ns: Callable[[], int] = monotonic_ns,
     ) -> None:
@@ -328,6 +363,18 @@ class MockController(QObject):
         self.state = MockProjectState()
         self._media_library = media_library or MediaLibrary.create_default()
         self._project_store = project_store or ProjectFileStore()
+        self._runtime = runtime
+        self._recovery_candidates = list(runtime.recovery_candidates) if runtime else []
+        self._background_handles: dict[tuple[str, CacheKind], JobHandle] = {}
+        self._protected_proxy_paths: dict[str, Path] = {}
+        self._pending_import: Future[tuple[MediaAnalysisResult, ...]] | None = None
+        self._import_cancel = Event()
+        self._pending_relink: Future[tuple[str, str, object]] | None = None
+        self._relink_cancel = Event()
+        self._pending_relink_confirmation: (
+            tuple[str, MediaAnalysis, RelinkComparison] | None
+        ) = None
+        self.last_relink_result: RelinkSuccess | RelinkFailure | None = None
         self.last_persistence_error: str | None = None
         self._history: list[_ControllerHistoryEntry] = []
         self._history_position = 0
@@ -336,6 +383,7 @@ class MockController(QObject):
         self._playback_clock_ns = playback_clock_ns
         self._playback = PlaybackClock(playback_clock_ns)
         self._saved_project = self._media_library.project
+        self._last_autosave_project = self._media_library.project
         self._sync_from_core(self._media_library.project)
 
     @property
@@ -353,10 +401,50 @@ class MockController(QObject):
         return self._media_library.project
 
     @property
+    def preview_project(self) -> Project:
+        """Return a transient preview snapshot that may substitute verified proxies."""
+
+        project = self._media_library.project
+        replacements = {
+            asset_id: asset.proxy_path
+            for asset_id, asset in self.state.assets.items()
+            if asset.proxy_enabled and asset.proxy_path is not None
+        }
+        if not replacements:
+            return project
+        return replace(
+            project,
+            media=tuple(
+                replace(media, source_path=replacements[media.asset_id])
+                if media.asset_id in replacements
+                else media
+                for media in project.media
+            ),
+        )
+
+    @property
     def media_history_count(self) -> int:
         """Return successful real media commands in this project session."""
 
         return self._media_library.history_count
+
+    @property
+    def pending_recovery(self) -> RecoveryCandidate | None:
+        return self._recovery_candidates[0] if self._recovery_candidates else None
+
+    @property
+    def recent_projects(self) -> tuple[RecentProject, ...]:
+        return self._runtime.recent_projects.load() if self._runtime is not None else ()
+
+    def remove_recent_project(self, path: str) -> None:
+        if self._runtime is None:
+            return
+        try:
+            self._runtime.recent_projects.remove(path)
+        except OSError:
+            self._set_status("최근 프로젝트 목록을 정리하지 못했습니다")
+            return
+        self._set_status("최근 프로젝트 목록에서 제거했습니다")
 
     @property
     def preview_position(self) -> ProjectTime:
@@ -437,8 +525,23 @@ class MockController(QObject):
         return candidate
 
     def _publish(self) -> None:
+        self._note_autosave_change()
         self.state_changed.emit()
         self.status_changed.emit(self.state.status_message)
+
+    def _note_autosave_change(self) -> None:
+        if self._runtime is None or not self.state.is_dirty:
+            return
+        project = self._media_library.project
+        if project == self._last_autosave_project:
+            return
+        self._runtime.autosave.note_change(
+            project,
+            normal_path=self.state.project_path,
+            history_position=self._history_position,
+            summary=self.state.status_message,
+        )
+        self._last_autosave_project = project
 
     def _set_status(self, message: str) -> None:
         self.state.status_message = message
@@ -523,11 +626,19 @@ class MockController(QObject):
         self._history_position = 0
 
     def new_project(self) -> None:
+        self._cancel_media_import()
+        self._cancel_relink()
+        previous_project = self._media_library.project
         project = Project.empty(project_id=str(uuid4()))
         self._media_library.reset(project)
         self.state = MockProjectState(status_message="새 프로젝트를 만들었습니다")
         self._reset_playback(project)
         self._saved_project = project
+        self._last_autosave_project = project
+        if self._runtime is not None:
+            self._runtime.autosave.normal_save_completed(previous_project)
+            self._cancel_background_handles()
+            self._runtime.media_queue.replace_project()
         self.last_persistence_error = None
         self._reset_history()
         self._publish()
@@ -713,6 +824,17 @@ class MockController(QObject):
                 status=(
                     AssetStatus.READY if Path(media.source_path).is_file() else AssetStatus.MISSING
                 ),
+                thumbnail_status=(
+                    "대기"
+                    if media.kind in {CoreMediaKind.VIDEO, CoreMediaKind.PHOTO}
+                    else "해당 없음"
+                ),
+                waveform_status=(
+                    "대기"
+                    if any(stream.kind is MediaStreamKind.AUDIO for stream in media.streams)
+                    else "해당 없음"
+                ),
+                stream_summary=_stream_summary(media),
                 is_real_media=True,
             )
 
@@ -801,8 +923,42 @@ class MockController(QObject):
                         if thumbnail_failure is not None
                         else None
                     ),
+                    thumbnail_status=(
+                        "준비됨"
+                        if thumbnail is not None
+                        else (
+                            "실패"
+                            if thumbnail_failure is not None
+                            else (
+                                "대기"
+                                if media.kind in {CoreMediaKind.VIDEO, CoreMediaKind.PHOTO}
+                                else "해당 없음"
+                            )
+                        )
+                    ),
+                    waveform_status=(
+                        "대기"
+                        if any(stream.kind is MediaStreamKind.AUDIO for stream in media.streams)
+                        else "해당 없음"
+                    ),
+                    stream_summary=_stream_summary(media),
                     is_real_media=True,
                 )
+            if existing.is_real_media:
+                existing.name = media.name
+                existing.kind = CORE_TO_UI_MEDIA_KIND[media.kind]
+                existing.duration_ms = (
+                    media.duration.to_milliseconds() if media.duration is not None else None
+                )
+                existing.width = media.width
+                existing.height = media.height
+                existing.source_path = media.source_path
+                existing.status = (
+                    AssetStatus.READY
+                    if Path(media.source_path).is_file()
+                    else AssetStatus.MISSING
+                )
+                existing.stream_summary = _stream_summary(media)
             assets[media.asset_id] = existing
         self.state.assets = assets
 
@@ -898,6 +1054,88 @@ class MockController(QObject):
 
         previous_position = self._media_library.history_position
         report = self._media_library.import_paths(source_paths)
+        return self._apply_import_report(report, previous_position)
+
+    def request_media_import(self, source_paths: Sequence[str]) -> bool:
+        """Analyze media off the UI thread when the W-10 runtime is available."""
+
+        if self._runtime is None:
+            self.import_media_files(source_paths)
+            return True
+        if not source_paths:
+            self.import_media_files(())
+            return False
+        if self._pending_import is not None and not self._pending_import.done():
+            self._set_status("이미 미디어를 분석하고 있습니다")
+            return False
+
+        paths = tuple(source_paths)
+        self._import_cancel = Event()
+        cancel = self._import_cancel
+
+        def analyze() -> tuple[MediaAnalysisResult, ...]:
+            results: list[MediaAnalysisResult] = []
+            analyzer = self._media_library.analyzer
+            if isinstance(analyzer, FfprobeAnalyzer):
+                analyzer = FfprobeAnalyzer(
+                    runner=lambda arguments, *, timeout: run_cancellable_process(
+                        arguments,
+                        cancel,
+                        timeout=timeout,
+                    )
+                )
+            for path in paths:
+                if cancel.is_set():
+                    break
+                try:
+                    results.append(analyzer.analyze(path))
+                except (OSError, RuntimeError, TypeError, ValueError) as error:
+                    results.append(
+                        MediaAnalysisFailure(
+                            path,
+                            MediaAnalysisErrorCode.PROCESS_FAILED,
+                            "미디어 분석 중 예기치 않은 오류가 발생했습니다.",
+                            str(error),
+                        )
+                    )
+            return tuple(results)
+
+        self._pending_import = self._runtime.import_executor.submit(analyze)
+        self._set_status(f"미디어 {len(paths)}개를 백그라운드에서 분석 중입니다")
+        return True
+
+    def _poll_media_import(self) -> None:
+        future = self._pending_import
+        if future is None or not future.done():
+            return
+        self._pending_import = None
+        try:
+            results = future.result()
+        except Exception as error:  # noqa: BLE001 - isolate the analysis worker boundary
+            self._set_status(f"미디어 분석 작업 실패 · {error}")
+            return
+        previous_position = self._media_library.history_position
+        report = self._media_library.import_analyzed(results)
+        self._apply_import_report(report, previous_position)
+
+    def _cancel_media_import(self) -> None:
+        self._import_cancel.set()
+        if self._pending_import is not None:
+            self._pending_import.cancel()
+            self._pending_import = None
+
+    def _cancel_relink(self) -> None:
+        self._relink_cancel.set()
+        if self._pending_relink is not None:
+            self._pending_relink.cancel()
+            self._pending_relink = None
+        self._pending_relink_confirmation = None
+
+    def _apply_import_report(
+        self,
+        report: MediaImportReport,
+        previous_position: int,
+    ) -> MediaImportReport:
         if report.cancelled:
             self._set_status("미디어 가져오기를 취소했습니다")
             self.state_changed.emit()
@@ -935,6 +1173,8 @@ class MockController(QObject):
             summary.append(f"썸네일 {len(report.thumbnail_failures)}개 기본 아이콘 사용")
         self.state.status_message = " · ".join(summary) or "가져올 미디어가 없습니다"
         self._publish()
+        for imported in report.imported:
+            self._schedule_background_artifacts(imported.reference)
         return report
 
     def _asset_view(self, imported: ImportedMedia) -> MockAsset:
@@ -959,6 +1199,25 @@ class MockController(QObject):
             thumbnail_error=(
                 thumbnail_failure.message if thumbnail_failure is not None else None
             ),
+            thumbnail_status=(
+                "준비됨"
+                if imported.thumbnail is not None
+                else (
+                    "실패"
+                    if thumbnail_failure is not None
+                    else (
+                        "대기"
+                        if reference.kind in {CoreMediaKind.VIDEO, CoreMediaKind.PHOTO}
+                        else "해당 없음"
+                    )
+                )
+            ),
+            waveform_status=(
+                "대기"
+                if any(stream.kind is MediaStreamKind.AUDIO for stream in reference.streams)
+                else "해당 없음"
+            ),
+            stream_summary=_stream_summary(reference),
             is_real_media=True,
         )
 
@@ -1068,11 +1327,20 @@ class MockController(QObject):
         self._saved_project = project
         self.state.is_dirty = False
         self.last_persistence_error = None
+        if self._runtime is not None:
+            self._runtime.autosave.normal_save_completed(project)
+            try:
+                self._runtime.recent_projects.record(target, project.name)
+            except OSError:
+                pass
         self._set_status("프로젝트를 저장했습니다")
         self.state_changed.emit()
         return True
 
     def open_project(self, path: str) -> bool:
+        self._cancel_media_import()
+        self._cancel_relink()
+        previous_project = self._media_library.project
         try:
             project = self._project_store.load(path)
             next_state = self._state_from_project(project, str(Path(path)))
@@ -1083,12 +1351,23 @@ class MockController(QObject):
 
         self._media_library.reset(project)
         self._saved_project = project
+        self._last_autosave_project = project
         self.state = next_state
         self._reset_playback(project)
         self._reset_history()
         self._id_counter = count(1)
         self.last_persistence_error = None
+        if self._runtime is not None:
+            self._runtime.autosave.normal_save_completed(previous_project)
+            self._cancel_background_handles()
+            self._runtime.media_queue.replace_project()
+            try:
+                self._runtime.recent_projects.record(path, project.name)
+            except OSError:
+                pass
         self._publish()
+        for reference in project.media:
+            self._schedule_background_artifacts(reference)
         return True
 
     def discard_unsaved_changes(self) -> None:
@@ -1098,7 +1377,53 @@ class MockController(QObject):
         self.state_changed.emit()
 
     def apply_recovery_choice(self, choice: str) -> None:
-        """Load the deterministic recovery result selected by the user."""
+        """Apply a validated recovery choice or retain the legacy mock scenario."""
+
+        candidate = self.pending_recovery
+        if self._runtime is not None and candidate is not None:
+            choices = {
+                "자동 저장본": RecoveryChoice.AUTOSAVE,
+                "정상 저장본": RecoveryChoice.NORMAL,
+                "나중에 결정": RecoveryChoice.LATER,
+            }
+            selected = choices.get(choice)
+            if selected is None:
+                self._set_status("알 수 없는 복구 선택입니다")
+                return
+            try:
+                result = self._runtime.autosave_store.choose(candidate, selected)
+            except RuntimeError as error:
+                self._set_status(f"프로젝트 복구 실패 · {error}")
+                return
+            if result.deferred:
+                self._set_status("복구 결정을 미뤘습니다 · 다음 시작에도 복구본을 유지합니다")
+                return
+            if result.project is None:
+                return
+            if selected is RecoveryChoice.NORMAL:
+                self._runtime.autosave_store.discard(candidate)
+            previous_project = self._media_library.project
+            self._runtime.autosave.normal_save_completed(previous_project)
+            self._media_library.reset(result.project)
+            self._saved_project = (
+                candidate.normal_project if result.dirty and candidate.normal_project else result.project
+            )
+            self._last_autosave_project = result.project
+            self.state = self._state_from_project(result.project, result.normal_path or "")
+            self.state.project_path = result.normal_path
+            self.state.is_dirty = result.dirty
+            self.state.status_message = (
+                f"{choice}을 열었습니다 · 정상 저장본을 덮어쓰지 않았습니다"
+            )
+            self._reset_playback(result.project)
+            self._reset_history()
+            self._recovery_candidates.pop(0)
+            self._cancel_background_handles()
+            self._runtime.media_queue.replace_project()
+            self._publish()
+            for reference in result.project.media:
+                self._schedule_background_artifacts(reference)
+            return
 
         self.load_sample_project()
         self.state.is_dirty = choice == "자동 저장본"
@@ -1379,6 +1704,139 @@ class MockController(QObject):
         self._execute_edit("누락 미디어 다시 연결", operation)
         return True
 
+    def relink_selected_asset_to(self, candidate_path: str, *, confirmed: bool = False) -> bool:
+        asset = self.selected_asset
+        if asset is None or asset.status is AssetStatus.READY:
+            self._set_status("다시 연결할 누락 미디어를 선택하세요")
+            return False
+        previous_position = self._media_library.history_position
+        result = MediaRelinker(
+            self._media_library.executor,
+            self._media_library.analyzer,
+        ).relink(asset.asset_id, candidate_path, confirmed=confirmed)
+        self.last_relink_result = result
+        if isinstance(result, RelinkFailure):
+            differences = " ".join(result.comparison.differences) if result.comparison else ""
+            self._set_status(f"다시 연결할 수 없습니다 · {result.message} {differences}".strip())
+            return False
+        return self._commit_relink_result(result, asset.asset_id, previous_position)
+
+    def request_relink_selected_asset_to(self, candidate_path: str) -> bool:
+        """Analyze a replacement off the UI thread and publish a later result."""
+
+        asset = self.selected_asset
+        if asset is None or asset.status is AssetStatus.READY:
+            self._set_status("다시 연결할 누락 미디어를 선택하세요")
+            return False
+        if self._runtime is None:
+            return self.relink_selected_asset_to(candidate_path)
+        if self._pending_relink is not None and not self._pending_relink.done():
+            self._set_status("이미 새 원본을 분석하고 있습니다")
+            return False
+        self._relink_cancel = Event()
+        self._pending_relink_confirmation = None
+        cancel = self._relink_cancel
+        analyzer = self._media_library.analyzer
+        if isinstance(analyzer, FfprobeAnalyzer):
+            analyzer = analyzer.with_runner(
+                lambda arguments, *, timeout: run_cancellable_process(
+                    arguments,
+                    cancel,
+                    timeout=timeout,
+                )
+            )
+        asset_id = asset.asset_id
+
+        def inspect() -> tuple[str, str, object]:
+            result = MediaRelinker(self._media_library.executor, analyzer).inspect(
+                asset_id, candidate_path
+            )
+            return asset_id, candidate_path, result
+
+        self._pending_relink = self._runtime.import_executor.submit(inspect)
+        self._set_status("선택한 새 원본을 백그라운드에서 분석 중입니다")
+        return True
+
+    def _poll_relink(self) -> None:
+        future = self._pending_relink
+        if future is None or not future.done():
+            return
+        self._pending_relink = None
+        try:
+            asset_id, candidate_path, inspected = future.result()
+        except Exception as error:  # noqa: BLE001 - isolate the analysis worker boundary
+            self._set_status(f"새 원본 분석 실패 · {error}")
+            return
+        if isinstance(inspected, RelinkFailure):
+            self.last_relink_result = inspected
+            self._set_status(f"다시 연결할 수 없습니다 · {inspected.message}")
+            return
+        if not isinstance(inspected, tuple) or len(inspected) != 2:
+            self._set_status("새 원본 분석 결과가 올바르지 않습니다")
+            return
+        analysis, comparison = inspected
+        if not isinstance(analysis, MediaAnalysis) or not isinstance(
+            comparison, RelinkComparison
+        ):
+            self._set_status("새 원본 분석 결과가 올바르지 않습니다")
+            return
+        relinker = MediaRelinker(self._media_library.executor, self._media_library.analyzer)
+        if comparison.match is RelinkMatch.CONFIRM:
+            failure = RelinkFailure(
+                code=RelinkErrorCode.CONFIRMATION_REQUIRED,
+                message="원본과 차이가 있어 사용자 확인이 필요합니다.",
+                comparison=comparison,
+            )
+            self.last_relink_result = failure
+            self._pending_relink_confirmation = (asset_id, analysis, comparison)
+            self._set_status("새 원본에 확인이 필요한 차이가 있습니다")
+            self.relink_confirmation_requested.emit(candidate_path, comparison.differences)
+            return
+        previous_position = self._media_library.history_position
+        result = relinker.apply_inspected(asset_id, analysis, comparison)
+        self.last_relink_result = result
+        self._commit_relink_result(result, asset_id, previous_position)
+
+    def confirm_pending_relink(self) -> bool:
+        pending = self._pending_relink_confirmation
+        self._pending_relink_confirmation = None
+        if pending is None:
+            self._set_status("확인할 새 원본이 없습니다")
+            return False
+        asset_id, analysis, comparison = pending
+        previous_position = self._media_library.history_position
+        result = MediaRelinker(
+            self._media_library.executor, self._media_library.analyzer
+        ).apply_inspected(asset_id, analysis, comparison, confirmed=True)
+        self.last_relink_result = result
+        return self._commit_relink_result(result, asset_id, previous_position)
+
+    def cancel_pending_relink_confirmation(self) -> None:
+        self._pending_relink_confirmation = None
+        self._set_status("원본 다시 연결을 취소했습니다 · 프로젝트는 변경되지 않았습니다")
+
+    def _commit_relink_result(
+        self,
+        result: RelinkSuccess | RelinkFailure,
+        asset_id: str,
+        previous_position: int,
+    ) -> bool:
+        if isinstance(result, RelinkFailure):
+            differences = " ".join(result.comparison.differences) if result.comparison else ""
+            self._set_status(f"다시 연결할 수 없습니다 · {result.message} {differences}".strip())
+            return False
+        self._record_core_history(previous_position)
+        self._sync_from_core(self._media_library.project)
+        self.state.is_dirty = self._media_library.project != self._saved_project
+        self.state.selected_asset_id = asset_id
+        self.state.status_message = "원본을 검증해 다시 연결했습니다"
+        if self._runtime is not None:
+            self._cancel_background_handles()
+            self._runtime.media_queue.replace_project()
+        self._publish()
+        self._schedule_background_artifacts(result.replacement)
+        return True
+
     def toggle_selected_proxy(self) -> bool:
         asset = self.selected_asset
         if asset is None:
@@ -1392,6 +1850,23 @@ class MockController(QObject):
             return False
 
         enabling = not asset.proxy_enabled
+        if self._runtime is not None and asset.is_real_media:
+            asset.proxy_enabled = enabling
+            if enabling:
+                asset.proxy_status = "대기 중"
+                reference = self._media_library.project.media_reference(asset.asset_id)
+                self._schedule_proxy(reference)
+                self._set_status("프록시 생성을 백그라운드에서 시작했습니다")
+            else:
+                handle = self._background_handles.pop((asset.asset_id, CacheKind.PROXY), None)
+                if handle is not None:
+                    handle.cancel()
+                self._release_proxy(asset.asset_id)
+                asset.proxy_path = None
+                asset.proxy_status = "사용 안 함"
+                self._set_status("프록시 사용을 해제했습니다 · 원본과 캐시는 보존됩니다")
+            self.state_changed.emit()
+            return True
 
         def operation() -> None:
             asset.proxy_enabled = enabling
@@ -1400,6 +1875,216 @@ class MockController(QObject):
         label = "프록시 사용" if enabling else "프록시 사용 해제"
         self._execute_edit(label, operation)
         return True
+
+    def autosave_tick(self) -> None:
+        if self._runtime is None:
+            return
+        self._runtime.autosave.tick()
+        self._poll_media_import()
+        self._poll_relink()
+        status = {
+            AutosaveState.IDLE: "대기",
+            AutosaveState.WAITING: "변경 대기 중",
+            AutosaveState.SAVING: "저장 중",
+            AutosaveState.SAVED: "자동 저장됨",
+            AutosaveState.FAILED: "자동 저장 실패",
+            AutosaveState.CLOSED: "종료됨",
+        }[self._runtime.autosave.state]
+        if status != self.state.autosave_status:
+            self.state.autosave_status = status
+            if self._runtime.autosave.state is AutosaveState.FAILED:
+                self.state.status_message = (
+                    "자동 저장에 실패했습니다 · 편집은 계속할 수 있으며 저장 위치를 확인하세요"
+                )
+            self.state_changed.emit()
+        self.poll_background_jobs()
+
+    def poll_background_jobs(self) -> None:
+        changed = False
+        for identity, handle in tuple(self._background_handles.items()):
+            result = handle.result
+            if result is None:
+                asset_id, kind = identity
+                asset = self.state.assets.get(asset_id)
+                if asset is not None and handle.state is JobState.RUNNING:
+                    if kind is CacheKind.THUMBNAIL and asset.thumbnail_status != "생성 중":
+                        asset.thumbnail_status = "생성 중"
+                        changed = True
+                    elif kind is CacheKind.WAVEFORM and asset.waveform_status != "생성 중":
+                        asset.waveform_status = "생성 중"
+                        changed = True
+                    elif kind is CacheKind.PROXY and asset.proxy_enabled:
+                        if asset.proxy_status != "생성 중":
+                            asset.proxy_status = "생성 중"
+                            changed = True
+                continue
+            asset_id, kind = identity
+            asset = self.state.assets.get(asset_id)
+            self._background_handles.pop(identity, None)
+            if asset is None:
+                continue
+            if result.state is JobState.READY and result.path is not None:
+                if kind is CacheKind.THUMBNAIL:
+                    try:
+                        asset.thumbnail_png = result.path.read_bytes()
+                        asset.thumbnail_error = None
+                        asset.thumbnail_status = "준비됨"
+                    except OSError as error:
+                        asset.thumbnail_error = str(error)
+                        asset.thumbnail_status = "실패"
+                elif kind is CacheKind.WAVEFORM:
+                    asset.waveform_path = str(result.path)
+                    asset.waveform_status = "준비됨"
+                elif kind is CacheKind.PROXY and asset.proxy_enabled:
+                    self._release_proxy(asset.asset_id)
+                    protected = self._runtime.cache.protect(result.path) if self._runtime else result.path
+                    self._protected_proxy_paths[asset.asset_id] = protected
+                    asset.proxy_path = str(result.path)
+                    asset.proxy_status = "준비됨 · 미리 보기 전용"
+            elif kind is CacheKind.THUMBNAIL:
+                asset.thumbnail_status = (
+                    "취소됨" if result.state is JobState.CANCELLED else "실패"
+                )
+                asset.thumbnail_error = "썸네일 생성 작업이 실패했습니다."
+            elif kind is CacheKind.WAVEFORM:
+                asset.waveform_status = "취소됨" if result.state is JobState.CANCELLED else "실패"
+            elif kind is CacheKind.PROXY and asset.proxy_enabled:
+                asset.proxy_status = "취소됨" if result.state is JobState.CANCELLED else "실패"
+            if result.state is JobState.FAILED:
+                summary = {
+                    CacheKind.THUMBNAIL: "썸네일을 만들지 못했습니다. 캐시 다시 생성을 시도하세요.",
+                    CacheKind.WAVEFORM: "파형을 만들지 못했습니다. 원본 오디오를 확인하세요.",
+                    CacheKind.PROXY: "프록시를 만들지 못했습니다. 원본 영상을 확인하세요.",
+                }[kind]
+                detail = (result.error or "").replace(asset.source_path, asset.name).strip()[:240]
+                asset.background_error = f"{summary} {detail}".strip()
+            changed = True
+        if changed:
+            if self._runtime is not None:
+                try:
+                    self._runtime.prune_cache()
+                except OSError:
+                    pass
+            self.state_changed.emit()
+
+    def _cancel_background_handles(self) -> None:
+        for handle in self._background_handles.values():
+            handle.cancel()
+        self._background_handles.clear()
+        for asset_id in tuple(self._protected_proxy_paths):
+            self._release_proxy(asset_id)
+
+    def _release_proxy(self, asset_id: str) -> None:
+        path = self._protected_proxy_paths.pop(asset_id, None)
+        if path is not None and self._runtime is not None:
+            self._runtime.cache.unprotect(path)
+
+    def regenerate_selected_cache(self) -> bool:
+        """Remove only the selected item's owned cache entries and enqueue fresh work."""
+
+        asset = self.selected_asset
+        if self._runtime is None or asset is None or not asset.is_real_media:
+            self._set_status("캐시를 다시 만들 실제 미디어를 선택하세요")
+            return False
+        try:
+            reference = self._media_library.project.media_reference(asset.asset_id)
+            keys = [self._runtime.artifacts.thumbnail_key(reference)] if reference.kind in {
+                CoreMediaKind.VIDEO,
+                CoreMediaKind.PHOTO,
+            } else []
+            if any(stream.kind is MediaStreamKind.AUDIO for stream in reference.streams):
+                keys.append(self._runtime.artifacts.waveform_key(reference))
+            if reference.kind is CoreMediaKind.VIDEO:
+                keys.append(self._runtime.artifacts.proxy_key(reference))
+        except (KeyError, OSError, ValueError):
+            self._set_status("원본 상태를 확인할 수 없어 캐시를 다시 만들 수 없습니다")
+            return False
+        for kind in CacheKind:
+            handle = self._background_handles.pop((asset.asset_id, kind), None)
+            if handle is not None:
+                handle.cancel()
+        self._release_proxy(asset.asset_id)
+        for key in keys:
+            self._runtime.cache.remove(key)
+        asset.thumbnail_png = None
+        asset.thumbnail_error = None
+        asset.background_error = None
+        asset.thumbnail_status = "대기"
+        asset.waveform_path = None
+        asset.waveform_status = "대기"
+        asset.proxy_path = None
+        asset.proxy_status = "대기 중" if asset.proxy_enabled else "사용 안 함"
+        self._schedule_background_artifacts(reference)
+        if asset.proxy_enabled:
+            self._schedule_proxy(reference)
+        self._set_status("선택한 미디어의 캐시를 안전하게 다시 생성합니다")
+        self.state_changed.emit()
+        return True
+
+    def _schedule_background_artifacts(self, reference: MediaReference) -> None:
+        if self._runtime is None or not Path(reference.source_path).is_file():
+            return
+        generation = self._runtime.media_queue.project_generation
+        scheduled = False
+        try:
+            if reference.kind in {CoreMediaKind.VIDEO, CoreMediaKind.PHOTO}:
+                key = self._runtime.artifacts.thumbnail_key(reference)
+                asset = self.state.assets.get(reference.asset_id)
+                if asset is not None:
+                    asset.thumbnail_status = "대기 중"
+                self._background_handles[(reference.asset_id, CacheKind.THUMBNAIL)] = (
+                    self._runtime.media_queue.submit(
+                        key,
+                        JobPriority.BACKGROUND_THUMBNAIL,
+                        lambda cancel, media=reference: self._runtime.artifacts.create_thumbnail(
+                            media, cancel
+                        ),
+                        project_generation=generation,
+                    )
+                )
+                scheduled = True
+            if any(stream.kind is MediaStreamKind.AUDIO for stream in reference.streams):
+                key = self._runtime.artifacts.waveform_key(reference)
+                asset = self.state.assets.get(reference.asset_id)
+                if asset is not None:
+                    asset.waveform_status = "대기 중"
+                self._background_handles[(reference.asset_id, CacheKind.WAVEFORM)] = (
+                    self._runtime.media_queue.submit(
+                        key,
+                        JobPriority.VISIBLE_WAVEFORM,
+                        lambda cancel, media=reference: self._runtime.artifacts.create_waveform(
+                            media, cancel
+                        ),
+                        project_generation=generation,
+                    )
+                )
+                scheduled = True
+        except (OSError, ValueError):
+            return
+        if scheduled:
+            self.state_changed.emit()
+
+    def _schedule_proxy(self, reference: MediaReference) -> None:
+        if self._runtime is None:
+            return
+        try:
+            key = self._runtime.artifacts.proxy_key(reference)
+        except (OSError, ValueError):
+            return
+        self._background_handles[(reference.asset_id, CacheKind.PROXY)] = (
+            self._runtime.media_queue.submit(
+                key,
+                JobPriority.PROXY,
+                lambda cancel, media=reference: self._runtime.artifacts.create_proxy(media, cancel),
+            )
+        )
+
+    def close_runtime(self, *, clean_exit: bool) -> None:
+        self._cancel_media_import()
+        self._cancel_relink()
+        if self._runtime is not None:
+            self._cancel_background_handles()
+            self._runtime.close(clean_exit=clean_exit)
 
     def move_selected_visual(self, offset: int) -> bool:
         selected = self.selected_clips

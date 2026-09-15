@@ -26,6 +26,7 @@ from movie_maker.project import (
     TimelineTrack,
     TrackKind,
     UnsupportedProjectVersion,
+    migrate_project_document,
     project_from_document,
     project_to_document,
 )
@@ -206,6 +207,9 @@ def test_document_excludes_session_and_regenerable_state(tmp_path: Path) -> None
         "panel",
         "thumbnail",
         "proxy",
+        "waveform",
+        "autosave",
+        "job_state",
         "export",
         "history",
     ):
@@ -339,3 +343,15 @@ def test_save_and_load_do_not_modify_missing_or_existing_source_media(tmp_path: 
     assert loaded.track(TrackKind.VISUAL).clips[1] == project.track(
         TrackKind.VISUAL
     ).clips[1]
+
+
+def test_schema_zero_migrates_on_a_detached_copy_without_mutating_source(tmp_path: Path) -> None:
+    project = _complete_project(tmp_path)
+    document = project_to_document(project)
+    document["schema_version"] = 0
+
+    migrated = migrate_project_document(document)
+
+    assert document["schema_version"] == 0
+    assert migrated["schema_version"] == 1
+    assert project_from_document(document) == project

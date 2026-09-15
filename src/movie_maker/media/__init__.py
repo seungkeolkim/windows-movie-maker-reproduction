@@ -1,4 +1,4 @@
-"""Local media analysis and library services."""
+"""Local media analysis, recovery, and background cache services."""
 
 from movie_maker.media.analysis import (
     AUDIO_EXTENSIONS,
@@ -15,6 +15,28 @@ from movie_maker.media.analysis import (
     canonical_source_path,
     media_kind_for_path,
 )
+from movie_maker.media.artifacts import (
+    ArtifactGenerationError,
+    MediaArtifactGenerator,
+    ProxySettings,
+    WaveformBucket,
+    WaveformSummary,
+    summarize_waveform,
+)
+from movie_maker.media.background import (
+    JobHandle,
+    JobPriority,
+    JobResult,
+    JobState,
+    PriorityMediaQueue,
+)
+from movie_maker.media.cache import (
+    CacheKey,
+    CacheKind,
+    CachePruneResult,
+    MediaCache,
+    SourceIdentity,
+)
 from movie_maker.media.library import (
     DuplicateMedia,
     ImportedMedia,
@@ -26,6 +48,18 @@ from movie_maker.media.library import (
     MediaRemovalFailure,
     MediaRemovalResult,
     MediaRemovalSuccess,
+)
+from movie_maker.media.relink import (
+    FolderRelinkCandidate,
+    FolderRelinkReport,
+    MediaRelinker,
+    RelinkComparison,
+    RelinkErrorCode,
+    RelinkFailure,
+    RelinkMatch,
+    RelinkResult,
+    RelinkSuccess,
+    compare_relink,
 )
 from movie_maker.media.thumbnail import (
     FfmpegThumbnailer,
@@ -40,28 +74,54 @@ __all__ = [
     "PHOTO_EXTENSIONS",
     "SUPPORTED_MEDIA_EXTENSIONS",
     "VIDEO_EXTENSIONS",
+    "ArtifactGenerationError",
+    "CacheKey",
+    "CacheKind",
+    "CachePruneResult",
     "DuplicateMedia",
     "FfmpegThumbnailer",
     "FfprobeAnalyzer",
+    "FolderRelinkCandidate",
+    "FolderRelinkReport",
     "ImportedMedia",
+    "JobHandle",
+    "JobPriority",
+    "JobResult",
+    "JobState",
     "MediaAnalysis",
     "MediaAnalysisErrorCode",
     "MediaAnalysisFailure",
     "MediaAnalysisResult",
     "MediaAnalysisSuccess",
+    "MediaArtifactGenerator",
+    "MediaCache",
     "MediaImportErrorCode",
     "MediaImportFailure",
     "MediaImportReport",
     "MediaLibrary",
+    "MediaRelinker",
     "MediaRemovalErrorCode",
     "MediaRemovalFailure",
     "MediaRemovalResult",
     "MediaRemovalSuccess",
+    "PriorityMediaQueue",
+    "ProxySettings",
+    "RelinkComparison",
+    "RelinkErrorCode",
+    "RelinkFailure",
+    "RelinkMatch",
+    "RelinkResult",
+    "RelinkSuccess",
+    "SourceIdentity",
     "ThumbnailErrorCode",
     "ThumbnailFailure",
     "ThumbnailResult",
     "ThumbnailSuccess",
+    "WaveformBucket",
+    "WaveformSummary",
     "canonical_source_key",
     "canonical_source_path",
+    "compare_relink",
     "media_kind_for_path",
+    "summarize_waveform",
 ]
