@@ -15,12 +15,26 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         action="store_true",
         help="GUI 런타임을 초기화하고 버전 정보를 출력한 뒤 종료합니다.",
     )
+    parser.add_argument(
+        "--project",
+        metavar="PATH",
+        help="지정한 .mmrproj 프로젝트를 앱 시작 시 엽니다.",
+    )
+    parser.add_argument(
+        "--online",
+        action="store_true",
+        help="명시적으로 온라인 앱 기능을 허용합니다(환경 설치·업데이트와 무관).",
+    )
     return parser.parse_args(arguments)
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
     options = parse_arguments(arguments)
-    return run(check_only=options.check)
+    return run(
+        check_only=options.check,
+        project_path=options.project,
+        online=options.online,
+    )
 
 
 if __name__ == "__main__":

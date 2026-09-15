@@ -6,8 +6,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$minimumUvVersion = [version]"0.12.1"
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$runtimeContractPath = Join-Path $PSScriptRoot "runtime-contract.json"
+$runtimeContract = Get-Content -Raw -Encoding UTF8 $runtimeContractPath | ConvertFrom-Json
+$minimumUvVersion = [version]$runtimeContract.minimumUvVersion
 
 if ($FFmpegDirectory -and -not (Test-Path -LiteralPath $FFmpegDirectory -PathType Container)) {
     throw "The specified FFmpeg directory does not exist: $FFmpegDirectory"
@@ -28,7 +30,7 @@ function Resolve-Executable {
     if ($env:MOVIE_MAKER_FFMPEG_DIR) {
         $directories.Add($env:MOVIE_MAKER_FFMPEG_DIR)
     }
-    $directories.Add((Join-Path $repositoryRoot "tools\ffmpeg\bin"))
+    $directories.Add((Join-Path $repositoryRoot $runtimeContract.ffmpeg.bundledCandidate))
 
     foreach ($directory in $directories) {
         $candidate = Join-Path $directory $fileName
@@ -53,8 +55,12 @@ if (-not [Environment]::Is64BitOperatingSystem) {
     throw "64-bit Windows is required."
 }
 
-$uvCommand = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue |
-    Select-Object -First 1
+$bundledUvPath = Join-Path $repositoryRoot ([string]$runtimeContract.uv.bundledCandidate)
+$uvCommand = if (Test-Path -LiteralPath $bundledUvPath -PathType Leaf) {
+    [pscustomobject]@{ Source = (Resolve-Path -LiteralPath $bundledUvPath).Path }
+} else {
+    Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 if (-not $uvCommand) {
     throw "uv was not found. Install it from https://docs.astral.sh/uv/getting-started/installation/."
 }
@@ -108,11 +114,15 @@ $encoders = $encoderOutput | Out-String
 if ($encoderExitCode -ne 0) {
     throw "Unable to inspect the FFmpeg encoder list."
 }
-if ($encoders -notmatch "(?m)\slibx264\s") {
-    throw "The libx264 H.264 encoder is required. Install an FFmpeg build containing libx264."
-}
-if ($encoders -notmatch "(?m)\saac\s") {
-    throw "An FFmpeg build containing an AAC encoder is required."
+$missingEncoders = @(
+    foreach ($encoder in $runtimeContract.ffmpeg.requiredEncoders) {
+        if ($encoders -notmatch "(?m)\s$([regex]::Escape($encoder))\s") {
+            $encoder
+        }
+    }
+)
+if ($missingEncoders.Count -gt 0) {
+    throw "Required FFmpeg encoders are missing: $($missingEncoders -join ', ')"
 }
 
 $filterOutput = & $ffmpegPath -hide_banner -filters 2>&1
@@ -121,42 +131,8 @@ $filters = $filterOutput | Out-String
 if ($filterExitCode -ne 0) {
     throw "Unable to inspect the FFmpeg filter list."
 }
-$requiredFilters = @(
-    "trim",
-    "atrim",
-    "setpts",
-    "asetpts",
-    "concat",
-    "scale",
-    "crop",
-    "pad",
-    "fps",
-    "format",
-    "setsar",
-    "aresample",
-    "aformat",
-    "atempo",
-    "adelay",
-    "volume",
-    "afade",
-    "amix",
-    "alimiter",
-    "apad",
-    "anull",
-    "anullsrc",
-    "xfade",
-    "acrossfade",
-    "drawtext",
-    "tpad",
-    "transpose",
-    "hflip",
-    "vflip",
-    "eq",
-    "colorbalance",
-    "hue"
-)
 $missingFilters = @(
-    foreach ($filter in $requiredFilters) {
+    foreach ($filter in $runtimeContract.ffmpeg.requiredFilters) {
         if ($filters -notmatch "(?m)\s$([regex]::Escape($filter))\s") {
             $filter
         }

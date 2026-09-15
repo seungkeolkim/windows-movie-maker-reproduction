@@ -56,10 +56,16 @@ def runtime_report() -> list[str]:
     ]
 
 
-def run(*, check_only: bool = False) -> int:
+def run(
+    *,
+    check_only: bool = False,
+    project_path: str | None = None,
+    online: bool = False,
+) -> int:
     """Run the environment check or show the desktop editor."""
 
     app = create_application()
+    app.setProperty("onlineMode", online)
     if check_only:
         print("\n".join(runtime_report()))
         return 0
@@ -71,7 +77,14 @@ def run(*, check_only: bool = False) -> int:
         # App-owned recovery metadata must never prevent direct project editing.
         runtime = None
     library = MediaLibrary.create_background_default() if runtime is not None else None
-    window = MainWindow(MockController(media_library=library, runtime=runtime))
+    controller = MockController(media_library=library, runtime=runtime)
+    if project_path is not None and not controller.open_project(project_path):
+        detail = controller.last_persistence_error or "Unknown project read error."
+        print(f"Unable to open project: {detail}", file=sys.stderr)
+        if runtime is not None:
+            runtime.close(clean_exit=True)
+        return 2
+    window = MainWindow(controller)
     if runtime is not None:
         app.aboutToQuit.connect(partial(runtime.close, clean_exit=True))
     window.show()

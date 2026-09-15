@@ -31,6 +31,9 @@
 | 22 | [DESIGN-0011: 창작 기능과 공통 합성 계약](design/design-0011-creative-features-contract.md) | W-09 녹음·더킹·텍스트·효과·전환과 미리 보기/출력 동등성 |
 | 23 | [DESIGN-0012: 복구와 백그라운드 작업 계약](design/design-0012-recovery-background-contract.md) | W-10 자동 저장·복구·다시 연결·작업 큐·캐시와 프록시 경계 |
 | 24 | [POLICY-0001: 라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) | 소프트웨어·코덱·기본 자산과 사용자 출력물 권리의 경계 |
+| 25 | [DESIGN-0013: Windows 런처와 설치 계약](design/design-0013-windows-launcher-installer-contract.md) | W-11 상태·프로세스·로그와 설치 수명주기 경계 |
+| 26 | [ADR-0005: Windows 패키지에 검증된 uv 포함](decisions/adr-0005-bundle-verified-uv-on-windows.md) | uv 별도 설치 없이 잠금 환경을 유지하는 배포 결정 |
+| 27 | [POLICY-0002: 실행 환경 개인정보와 네트워크](policies/policy-0002-runtime-privacy-and-network.md) | 구성 동의, 네트워크와 로컬 진단 정보의 경계 |
 
 제품 방향만 파악할 때는 1~4번을 읽는다. 화면을 변경하려면 DESIGN과 MOCK 문서까지, 실제
 로직을 연결하려면 MOCK-0003의 연결 순서와 관련 ADR까지 읽는다. 정책 문서는 미디어, 출력,
@@ -62,6 +65,7 @@
 | 편집 결과를 어떻게 검증된 MP4로 안전하게 출력하는가 | [DESIGN-0009](design/design-0009-mp4-export-contract.md) | [DESIGN-0008](design/design-0008-audio-mixing-contract.md) |
 | 내레이션·텍스트·효과·전환을 어떻게 같은 의미로 미리 보고 출력하는가 | [DESIGN-0011](design/design-0011-creative-features-contract.md) | [DESIGN-0008](design/design-0008-audio-mixing-contract.md), [DESIGN-0009](design/design-0009-mp4-export-contract.md) |
 | 자동 저장·복구·다시 연결·캐시와 프록시 수명주기는 무엇인가 | [DESIGN-0012](design/design-0012-recovery-background-contract.md) | [DESIGN-0005](design/design-0005-project-persistence-contract.md), [ADR-0004](decisions/adr-0004-single-embedded-database.md) |
+| Windows 런처는 환경을 어떻게 점검하고 설치·제거하는가 | [DESIGN-0013](design/design-0013-windows-launcher-installer-contract.md) | [ADR-0005](decisions/adr-0005-bundle-verified-uv-on-windows.md), [POLICY-0002](policies/policy-0002-runtime-privacy-and-network.md) |
 | 개발 및 실행 명령은 무엇인가 | [프로젝트 README](../README.md) | [스크립트 안내](../scripts/README.md) |
 | 출력 영상, FFmpeg, 코덱과 기본 자산의 권리 범위는 무엇인가 | [POLICY-0001](policies/policy-0001-licensing-and-output-rights.md) | [프로젝트 README](../README.md) |
 | 문서 파일의 이름과 위치를 어떻게 정하는가 | 이 문서 | [WORKFLOW-0001](workflows/workflow-0001-feature-ui-mockup.md) |
@@ -97,9 +101,12 @@
 | `W-08` 고급 타임라인과 행동 이력 UI | 완료 | [DESIGN-0010](design/design-0010-advanced-timeline-contract.md), [고급 명령](../src/movie_maker/timeline/advanced.py), [통합 테스트](../tests/ui/test_advanced_timeline_integration.py) |
 | `W-09` 창작 기능과 공통 합성 | 완료 | [DESIGN-0011](design/design-0011-creative-features-contract.md), [창작 기능 소스](../src/movie_maker/creative/), [창작 기능 테스트](../tests/creative/) |
 | `W-10` 복구와 백그라운드 작업 | 완료 | [DESIGN-0012](design/design-0012-recovery-background-contract.md), [복구 소스](../src/movie_maker/project/recovery.py), [미디어 작업 소스](../src/movie_maker/media/background.py) |
+| `W-11` Windows 런처와 설치 | 구현 완료, 릴리스 시각 게이트 | [DESIGN-0013](design/design-0013-windows-launcher-installer-contract.md), [런처 소스](../launcher/), [Windows 통합 테스트](../tests/launcher/) |
 
-W-11은 선행 서비스 결과에 따라 시작하며 전체 순서와 검증 기준은 MOCK-0003을 따른다.
-W-10은 DB를 추가하지 않고 프로젝트 밖의 작은 JSON과 재생성 가능한 캐시만 쓴다.
+W-10은 DB를 추가하지 않고 프로젝트 밖의 작은 JSON과 재생성 가능한 캐시만 쓴다. W-11은
+네이티브 x64 런처·설치 관리자, 내부 uv와 트랜잭션 복구까지 구현·자동 검증했다. 실제 코드 서명은
+인증서가 있는 릴리스에서, Windows 고대비와 125~200% 배율 시각 확인은 UI 제어가 가능한 릴리스
+호스트에서 수행한다.
 
 ## 카테고리와 파일명 규칙
 
@@ -151,6 +158,7 @@ W-10은 DB를 추가하지 않고 프로젝트 밖의 작은 JSON과 재생성 �
 | `DESIGN-0010` | 승인됨 | [고급 타임라인과 세션 행동 계약](design/design-0010-advanced-timeline-contract.md) |
 | `DESIGN-0011` | 승인됨 | [창작 기능과 공통 합성 계약](design/design-0011-creative-features-contract.md) |
 | `DESIGN-0012` | 승인됨 | [자동 저장·복구·다시 연결과 백그라운드 작업 계약](design/design-0012-recovery-background-contract.md) |
+| `DESIGN-0013` | 승인됨 | [Windows 네이티브 런처와 설치 수명주기 계약](design/design-0013-windows-launcher-installer-contract.md) |
 | `MOCK-0001` | 승인됨 | [목업 동작 및 상태 명세](mock/mock-0001-behavior-specification.md) |
 | `MOCK-0002` | 승인됨 | [인터랙티브 목업 검증 시나리오](mock/mock-0002-validation-scenarios.md) |
 | `MOCK-0003` | 승인됨 | [목업 검토 기록과 UI 기준선](mock/mock-0003-review-log.md) |
@@ -158,7 +166,9 @@ W-10은 DB를 추가하지 않고 프로젝트 밖의 작은 JSON과 재생성 �
 | `ADR-0002` | 승인됨 | [명령 기반 편집과 세션 행동 이력](decisions/adr-0002-command-based-edit-history.md) |
 | `ADR-0003` | 승인됨 | [프로젝트 코어 상태, 시간 단위와 저장 경계](decisions/adr-0003-project-core-state-and-storage.md) |
 | `ADR-0004` | 승인됨 | [파일 기반 경량 데이터베이스 단일화](decisions/adr-0004-single-embedded-database.md) |
+| `ADR-0005` | 승인됨 | [Windows 패키지에 검증된 uv 포함](decisions/adr-0005-bundle-verified-uv-on-windows.md) |
 | `POLICY-0001` | 초안 | [라이선스와 출력물 권리](policies/policy-0001-licensing-and-output-rights.md) |
+| `POLICY-0002` | 승인됨 | [실행 환경 개인정보와 네트워크](policies/policy-0002-runtime-privacy-and-network.md) |
 
 아키텍처 결정을 변경할 때 기존 ADR을 조용히 덮어쓰지 않는다. 새 ADR을 추가하고 이전 결정의
 상태와 대체 관계를 표시한다. 다른 승인 문서를 의미 있게 대체할 때도 기존 문서의 상태와

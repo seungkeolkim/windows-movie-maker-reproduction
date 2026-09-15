@@ -10,6 +10,15 @@ $ErrorActionPreference = "Stop"
 
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $environmentPath = Join-Path $repositoryRoot ".venv"
+$runtimeContract = Get-Content -Raw -Encoding UTF8 (
+    Join-Path $PSScriptRoot "runtime-contract.json"
+) | ConvertFrom-Json
+$bundledUvPath = Join-Path $repositoryRoot ([string]$runtimeContract.uv.bundledCandidate)
+$uvExecutable = if (Test-Path -LiteralPath $bundledUvPath -PathType Leaf) {
+    (Resolve-Path -LiteralPath $bundledUvPath).Path
+} else {
+    (Get-Command uv -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+}
 
 Push-Location $repositoryRoot
 try {
@@ -22,14 +31,7 @@ try {
         $env:MOVIE_MAKER_FFMPEG_DIR = (Resolve-Path -LiteralPath $FFmpegDirectory).Path
     }
 
-    $runArguments = @(
-        "--managed-python",
-        "run",
-        "--locked",
-        "--no-sync",
-        "--",
-        "movie-maker"
-    )
+    $runArguments = @($runtimeContract.commands.run)
     if ($AppArguments) {
         $forwardedArguments = @($AppArguments)
         if ($forwardedArguments[0] -eq "--") {
@@ -38,7 +40,7 @@ try {
         $runArguments += $forwardedArguments
     }
 
-    & uv @runArguments
+    & $uvExecutable @runArguments
     exit $LASTEXITCODE
 }
 finally {

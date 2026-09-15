@@ -2,10 +2,27 @@
 
 set -Eeuo pipefail
 
-readonly MINIMUM_UV_VERSION="0.12.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+RUNTIME_CONTRACT="$SCRIPT_DIR/runtime-contract.json"
+MINIMUM_UV_VERSION="$(sed -nE 's/.*"minimumUvVersion":[[:space:]]*"([^"]+)".*/\1/p' "$RUNTIME_CONTRACT")"
 FFMPEG_DIRECTORY=""
+
+json_string_array() {
+    local key="$1"
+    awk -v key="\"$key\"" '
+        index($0, key) { reading=1; next }
+        reading && /]/ { exit }
+        reading {
+            value=$0
+            gsub(/^[[:space:]]*"|",?[[:space:]]*$/, "", value)
+            if (length(value)) print value
+        }
+    ' "$RUNTIME_CONTRACT"
+}
+
+mapfile -t REQUIRED_ENCODERS < <(json_string_array requiredEncoders)
+mapfile -t REQUIRED_FILTERS < <(json_string_array requiredFilters)
 
 usage() {
     cat <<'EOF'
@@ -89,17 +106,15 @@ ffmpeg_version="${ffmpeg_version_output%%$'\n'*}"
 ffprobe_version_output="$("$ffprobe_path" -hide_banner -version 2>&1)"
 ffprobe_version="${ffprobe_version_output%%$'\n'*}"
 encoders="$("$ffmpeg_path" -hide_banner -encoders 2>&1)"
-grep -Eq '[[:space:]]libx264[[:space:]]' <<<"$encoders" || fail "The libx264 H.264 encoder is required. Install an FFmpeg build containing libx264."
-grep -Eq '[[:space:]]aac[[:space:]]' <<<"$encoders" || fail "An FFmpeg build containing the AAC encoder is required."
+missing_encoders=()
+for encoder in "${REQUIRED_ENCODERS[@]}"; do
+    grep -Eq "[[:space:]]${encoder}[[:space:]]" <<<"$encoders" || missing_encoders+=("$encoder")
+done
+((${#missing_encoders[@]} == 0)) || fail "Required FFmpeg encoders are missing: ${missing_encoders[*]}"
 
 filters="$("$ffmpeg_path" -hide_banner -filters 2>&1)"
-required_filters=(
-    trim atrim setpts asetpts concat scale crop pad fps format setsar aresample aformat atempo adelay
-    volume afade amix alimiter apad anull anullsrc xfade acrossfade drawtext tpad transpose hflip vflip
-    eq colorbalance hue
-)
 missing_filters=()
-for filter in "${required_filters[@]}"; do
+for filter in "${REQUIRED_FILTERS[@]}"; do
     grep -Eq "[[:space:]]${filter}[[:space:]]" <<<"$filters" || missing_filters+=("$filter")
 done
 ((${#missing_filters[@]} == 0)) || fail "Required FFmpeg filters are missing: ${missing_filters[*]}"

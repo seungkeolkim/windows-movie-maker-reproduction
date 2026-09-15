@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "productId": "MovieMakerReproduction",
+  "displayName": "Movie Maker Reproduction",
+  "version": "0.1.0",
+  "minimumUvVersion": "0.12.1",
+  "uv": {
+    "bundledCandidate": "tools/uv/uv.exe",
+    "bundledVersion": "0.12.1",
+    "sha256": "f537cc65c1791d9d1a022132302b21ecd48cdf0a605a7b345809fbe8af4e807d",
+    "source": "https://github.com/astral-sh/uv/releases/download/0.12.1/uv-x86_64-pc-windows-msvc.zip"
+  },
+  "requiredFiles": [
+    ".python-version",
+    "pyproject.toml",
+    "uv.lock",
+    "README.md",
+    "scripts/environment/runtime-contract.json"
+  ],
+  "ffmpeg": {
+    "environmentVariable": "MOVIE_MAKER_FFMPEG_DIR",
+    "bundledCandidate": "tools/ffmpeg/bin",
+    "requiredEncoders": [
+      "libx264",
+      "aac"
+    ],
+    "requiredFilters": [
+      "trim",
+      "atrim",
+      "setpts",
+      "asetpts",
+      "concat",
+      "scale",
+      "crop",
+      "pad",
+      "fps",
+      "format",
+      "setsar",
+      "aresample",
+      "aformat",
+      "atempo",
+      "adelay",
+      "volume",
+      "afade",
+      "amix",
+      "alimiter",
+      "apad",
+      "anull",
+      "anullsrc",
+      "xfade",
+      "acrossfade",
+      "drawtext",
+      "tpad",
+      "transpose",
+      "hflip",
+      "vflip",
+      "eq",
+      "colorbalance",
+      "hue"
+    ]
+  },
+  "commands": {
+    "configure": [
+      "--managed-python",
+      "sync",
+      "--locked",
+      "--no-dev"
+    ],
+    "run": [
+      "--managed-python",
+      "run",
+      "--locked",
+      "--no-sync",
+      "--",
+      "movie-maker"
+    ]
+  },
+  "logging": {
+    "retentionDays": 14,
+    "maximumBytes": 10485760,
+    "maximumCapturedProcessBytes": 8192
+  }
+}

@@ -4,8 +4,24 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+RUNTIME_CONTRACT="$SCRIPT_DIR/runtime-contract.json"
 FFMPEG_DIRECTORY=""
 APP_ARGUMENTS=()
+
+json_string_array() {
+    local key="$1"
+    awk -v key="\"$key\"" '
+        index($0, key) { reading=1; next }
+        reading && /]/ { exit }
+        reading {
+            value=$0
+            gsub(/^[[:space:]]*"|",?[[:space:]]*$/, "", value)
+            if (length(value)) print value
+        }
+    ' "$RUNTIME_CONTRACT"
+}
+
+mapfile -t RUN_ARGUMENTS < <(json_string_array run)
 
 usage() {
     cat <<'EOF'
@@ -51,4 +67,4 @@ if [[ -n "$FFMPEG_DIRECTORY" ]]; then
 fi
 
 cd -- "$REPOSITORY_ROOT"
-exec uv --managed-python run --locked --no-sync -- movie-maker "${APP_ARGUMENTS[@]}"
+exec uv "${RUN_ARGUMENTS[@]}" "${APP_ARGUMENTS[@]}"

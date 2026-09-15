@@ -4,8 +4,24 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+RUNTIME_CONTRACT="$SCRIPT_DIR/runtime-contract.json"
 DEV=0
 FFMPEG_DIRECTORY=""
+
+json_string_array() {
+    local key="$1"
+    awk -v key="\"$key\"" '
+        index($0, key) { reading=1; next }
+        reading && /]/ { exit }
+        reading {
+            value=$0
+            gsub(/^[[:space:]]*"|",?[[:space:]]*$/, "", value)
+            if (length(value)) print value
+        }
+    ' "$RUNTIME_CONTRACT"
+}
+
+mapfile -t CONFIGURE_ARGUMENTS < <(json_string_array configure)
 
 usage() {
     cat <<'EOF'
@@ -61,7 +77,7 @@ if ((DEV)); then
     uv --managed-python sync --locked --group dev
 else
     printf 'Syncing .venv with runtime dependencies...\n'
-    uv --managed-python sync --locked --no-dev
+    uv "${CONFIGURE_ARGUMENTS[@]}"
 fi
 
 uv_python_directory="$(uv python dir)"

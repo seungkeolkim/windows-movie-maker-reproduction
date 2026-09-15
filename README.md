@@ -7,7 +7,7 @@
 현재는 실행 환경 스캐폴딩, MVP·1.0 화면 계약을 검증하는 인터랙티브 Qt 목업, W-01 프로젝트
 코어, W-02 실제 미디어 보관함, W-03 프로젝트 저장·열기, W-04 타임라인 편집, W-05 실제
 영상 미리 보기, W-06 원본음·음악 믹싱, W-07 MP4 출력, W-08 고급 타임라인, W-09 창작
-기능과 W-10 자동 저장·복구·백그라운드 작업까지 구현되어
+기능, W-10 자동 저장·복구·백그라운드 작업과 W-11 Windows 런처·설치 흐름까지 구현되어
 있습니다. 로컬 영상·사진·오디오를 분석해 고정 트랙에 추가하고, 클립 이동·삭제·분할·트리밍,
 사진 길이와 영상 속도 변경을 실행 취소·다시 실행할 수 있습니다. 결과는 `schema_version`이
 있는 UTF-8 JSON 파일에 원자적으로 저장됩니다. 영상·사진 프레임과 영상 원본음·배경 음악의
@@ -155,7 +155,7 @@ Microsoft 커뮤니티의 버전별 설명에 따르면 기존 버전은 클립�
 
 ## 기술 및 실행 방식
 
-애플리케이션 로직과 UI는 **Python + PySide6(Qt Widgets)**로 구현하고, 미디어 분석과 렌더링은 **FFmpeg/ffprobe**에 위임합니다. 저장소는 Python 런타임이나 완성된 가상환경을 포함하지 않으며, 사용자가 설치한 [`uv`](https://docs.astral.sh/uv/)가 프로젝트 전용 `.venv`를 구성합니다.
+애플리케이션 로직과 UI는 **Python + PySide6(Qt Widgets)**로 구현하고, 미디어 분석과 렌더링은 **FFmpeg/ffprobe**에 위임합니다. 저장소는 Python 런타임이나 완성된 가상환경을 포함하지 않습니다. Windows 설치 패키지는 검증된 [`uv`](https://docs.astral.sh/uv/) 실행 파일을 포함해 프로젝트 전용 `.venv`를 구성하고, 소스에서 실행하는 개발자는 설치된 uv를 사용할 수 있습니다.
 
 재현 가능한 실행 환경은 다음 세 파일로 관리합니다.
 
@@ -167,11 +167,21 @@ Microsoft 커뮤니티의 버전별 설명에 따르면 기존 버전은 클립�
 
 ### 사전 요구 사항
 
-다음 항목만 사용자가 준비하면 됩니다.
+Windows 설치 패키지 사용자는 다음 항목만 준비하면 됩니다.
+
+- 64비트 Windows
+- 최초 Python 및 패키지 다운로드를 위한 인터넷 연결
+- 동일한 배포본에서 가져온 FFmpeg와 ffprobe
+
+별도 .NET 런타임, C/C++ 빌드 도구, uv, Python, Qt SDK 또는 PySide6를 설치할 필요가 없습니다.
+설치 패키지의 네이티브 EXE는 릴리스 컴퓨터에서 미리 빌드되며 Windows 시스템 구성 요소만
+사용합니다. 패키지의 고정 uv가 CPython 3.13.14와 잠긴 Python 패키지를 사용자 승인 후
+구성합니다.
+
+소스에서 직접 실행하는 개발 환경은 다음 항목이 필요합니다.
 
 - 64비트 Windows 또는 64비트 Linux(`x86_64`, `aarch64`)
 - [`uv` 0.12.1 이상](https://docs.astral.sh/uv/getting-started/installation/)
-- 최초 Python 및 패키지 다운로드를 위한 인터넷 연결
 - 동일한 배포본에서 가져온 FFmpeg와 ffprobe
 - Linux에서는 Qt GUI 실행에 필요한 X11/Wayland, OpenGL/EGL, XKB/XCB, 글꼴, DBus 및 오디오 런타임 라이브러리
 
@@ -359,20 +369,42 @@ GUI 테스트는 `pytest-qt`와 PySide6를 사용하도록 `pyproject.toml`에 �
 - `.venv`가 손상된 경우 생성물인 `.venv`를 이름 변경하거나 제거한 뒤 운영체제에 맞는 설정 스크립트를 다시 실행합니다. uv 관리형 Python과 패키지 캐시는 재사용됩니다.
 - FFmpeg 검사에서 실패하면 FFmpeg와 ffprobe 실행 파일이 같은 배포본인지, 필수 인코더와 필터가 포함된 완전한 빌드인지 확인합니다.
 
-별도의 작은 Windows 네이티브 실행기 `MovieMakerLauncher.exe`는 향후 제공합니다. 런처는 Python을 내장하지 않고 `uv` 설치 여부, 고정 Python 버전, `.venv`, FFmpeg를 점검한 뒤 같은 실행 명령을 호출합니다. 일반 옵션은 체크박스나 선택 항목으로 제공하고, 고급 사용자는 추가 인자를 전달할 수 있게 합니다.
+### Windows 설치 패키지와 런처
 
-다음은 런처와 온라인 기능이 구현된 뒤 사용할 예정인 인자 전달 규약이며 현재 앱에서는 아직 동작하지 않습니다.
+배포 ZIP을 푼 뒤 `SIGNING-STATUS.txt`를 확인하고 `MovieMakerSetup.exe`를 실행합니다. 시작 메뉴,
+바탕 화면 바로가기, `.mmrproj` 파일 연결과 런처 디렉터리의 사용자 PATH 등록을 각각 선택할 수
+있습니다. PATH 선택은 `MovieMakerLauncher.exe`가 있는 디렉터리만 등록하며 Python, `.venv`, uv와
+FFmpeg는 등록하지 않습니다.
+
+첫 실행에서 `MovieMakerLauncher.exe`는 패키지에 포함된 uv, 고정 Python, `.venv`와
+FFmpeg/ffprobe를 점검합니다. 환경 구성 또는 복구는 설명을 보여 준 뒤 사용자가 승인한 경우에만
+실행하며, 일반 앱 실행은 네트워크나 환경 변경을 일으키지 않습니다. 준비됨 상태에서 프로젝트를
+선택하거나 다음과 같이 앱 인자를 전달할 수 있습니다.
 
 ```powershell
 MovieMakerLauncher.exe -- --online
-uv --managed-python run --locked --no-sync -- movie-maker --online
+MovieMakerLauncher.exe -- --project "C:\Videos\여행 프로젝트.mmrproj"
 ```
 
-첫 번째 `--` 뒤의 인자는 Python 애플리케이션에 그대로 전달합니다. `--online`은 앱 동작 모드이며 의존성 설치 여부를 뜻하지 않습니다. Python, `.venv`, FFmpeg 경로는 시스템 `PATH`에 추가하지 않습니다. 터미널 실행이 필요한 사용자를 위해 런처 디렉터리만 선택적으로 사용자 `PATH`에 등록할 수 있습니다.
+첫 번째 `--` 뒤의 인자는 Python 애플리케이션에 원래 argv 단위로 전달합니다. `--online`은 앱
+동작 모드이며 의존성 설치나 제품 업데이트를 뜻하지 않습니다. 진단 보기는 복사 가능한 세부사항과
+로그 위치를 표시하며 기본 로그 위치는
+`%LOCALAPPDATA%\OpenAI\MovieMakerReproduction\Logs`입니다. 유지관리 화면에서 새 패키지로
+명시적 업데이트를 실행하거나 제거할 수 있고, 제거는 사용자 프로젝트와 원본 미디어를 보존합니다.
+
+릴리스 빌드는 MSVC 개발자 PowerShell 또는 검증된 portable Zig가 있는 개발 컴퓨터에서만
+실행합니다. 이 도구들은 사용자 패키지에 들어가지 않습니다.
+
+```powershell
+.\launcher\build.ps1 -ZigPath C:\Tools\zig\zig.exe
+.\scripts\packaging\build-windows.ps1 -ZigPath C:\Tools\zig\zig.exe
+```
 
 전체 결정과 런처 책임 범위는
 [ADR-0001: Python, uv 및 네이티브 런처](docs/decisions/adr-0001-python-uv-native-launcher.md)에
-기록합니다.
+기록합니다. 실제 상태·프로세스·설치 계약은
+[DESIGN-0013](docs/design/design-0013-windows-launcher-installer-contract.md), 네트워크와 로그
+경계는 [POLICY-0002](docs/policies/policy-0002-runtime-privacy-and-network.md)를 따릅니다.
 
 ## 로드맵
 
@@ -382,7 +414,7 @@ uv --managed-python run --locked --no-sync -- movie-maker --online
 
 - [x] Python, PySide6, uv 및 네이티브 런처를 기본 기술 구성으로 결정
 - [x] 정확한 CPython 패치 버전과 최소 지원 uv 버전 확정
-- [ ] 런처에서 환경 점검과 애플리케이션 인자 전달 검증
+- [x] 런처에서 환경 점검과 애플리케이션 인자 전달 검증
 - [ ] 디코딩·인코딩 엔진과 라이선스 검토
 - [ ] 대표 입력 파일(H.264, HEVC, 가변 프레임률, MP3, WAV, JPEG, PNG) 호환성 실험
 - [ ] 10분 분량 프로젝트의 프레임 정확도와 미리 보기 성능 검증
@@ -430,7 +462,7 @@ uv --managed-python run --locked --no-sync -- movie-maker --online
 - [ ] 출력 품질·해상도·프레임률 프리셋
 - [ ] 장시간 내보내기 진행률 정확도, 취소 후 정리 및 오류 복구
 - [ ] 키보드 단축키, 접근성, 다국어화 기반
-- [ ] Windows 설치·업데이트·제거 흐름
+- [x] Windows 설치·업데이트·제거 흐름
 
 **완료 조건:** 60분 프로젝트를 편집·저장·재개·출력하는 안정성 시험을 통과하고, 지원 형식 표와 알려진 제한 사항이 문서화된다.
 
@@ -491,6 +523,7 @@ uv --managed-python run --locked --no-sync -- movie-maker --online
 | 렌더링 | W-07 원본/720p/1080p H.264/AAC MP4, 진행·취소·검증과 원자적 게시 구현 |
 | 창작 기능 | W-09 실제 내레이션 WAV, 페이드·더킹·3버스 믹서, 텍스트·시각 효과·인접 전환과 공통 미리 보기/출력 합성 구현 |
 | 복구와 백그라운드 작업 | W-10 자동 저장·비정상 종료 복구, 최근 프로젝트, 검증된 다시 연결, 실제 파형·썸네일·미리 보기 전용 프록시 구현 |
+| Windows 실행·배포 | W-11 네이티브 런처, 검증된 내부 uv, 환경 진단·복구와 설치·업데이트·제거 구현 |
 | 첫 사용 가능 버전 | 미배포 |
 
 완료되지 않은 편집 기능은 README에서 지원한다고 표시하지 않습니다.

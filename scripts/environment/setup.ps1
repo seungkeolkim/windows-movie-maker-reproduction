@@ -9,6 +9,15 @@ $ErrorActionPreference = "Stop"
 
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $pythonVersionFile = Join-Path $repositoryRoot ".python-version"
+$runtimeContract = Get-Content -Raw -Encoding UTF8 (
+    Join-Path $PSScriptRoot "runtime-contract.json"
+) | ConvertFrom-Json
+$bundledUvPath = Join-Path $repositoryRoot ([string]$runtimeContract.uv.bundledCandidate)
+$uvExecutable = if (Test-Path -LiteralPath $bundledUvPath -PathType Leaf) {
+    (Resolve-Path -LiteralPath $bundledUvPath).Path
+} else {
+    (Get-Command uv -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+}
 
 Push-Location $repositoryRoot
 try {
@@ -20,32 +29,31 @@ try {
     }
 
     Write-Host "Preparing uv-managed CPython $pythonVersion..." -ForegroundColor Cyan
-    & uv --managed-python python install $pythonVersion
+    & $uvExecutable --managed-python python install $pythonVersion
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to install uv-managed CPython $pythonVersion. Update uv and try again."
     }
 
-    $syncArguments = @("--managed-python", "sync", "--locked")
+    $syncArguments = @($runtimeContract.commands.configure)
     if ($Dev) {
-        $syncArguments += @("--group", "dev")
+        $syncArguments = @("--managed-python", "sync", "--locked", "--group", "dev")
         Write-Host "Syncing .venv with development dependencies..." -ForegroundColor Cyan
     }
     else {
-        $syncArguments += "--no-dev"
         Write-Host "Syncing .venv with runtime dependencies..." -ForegroundColor Cyan
     }
 
-    & uv @syncArguments
+    & $uvExecutable @syncArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to sync .venv. Check uv.lock and the network connection."
     }
 
-    $uvPythonDirectory = (& uv python dir 2>&1 | Out-String).Trim()
+    $uvPythonDirectory = (& $uvExecutable python dir 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to locate the uv-managed Python directory."
     }
     $baseInterpreterDirectory = (
-        & uv --managed-python run --locked --no-sync -- python -c "import sys; print(sys.base_prefix)" 2>&1 |
+        & $uvExecutable --managed-python run --locked --no-sync -- python -c "import sys; print(sys.base_prefix)" 2>&1 |
             Out-String
     ).Trim()
     if ($LASTEXITCODE -ne 0) {
@@ -63,7 +71,7 @@ try {
     }
 
     Write-Host "Checking the GUI runtime..." -ForegroundColor Cyan
-    & uv --managed-python run --locked --no-sync -- movie-maker --check
+    & $uvExecutable --managed-python run --locked --no-sync -- movie-maker --check
     if ($LASTEXITCODE -ne 0) {
         throw "The GUI runtime check failed. Review the Qt or DLL error above."
     }
