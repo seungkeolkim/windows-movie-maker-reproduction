@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QPoint, Qt, QUrl
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -106,6 +106,48 @@ def test_timeline_ruler_and_global_playhead_share_track_time_scale(qtbot) -> Non
         * ruler.width()
     )
     assert global_playhead._x == expected_x
+
+
+def test_clicking_either_seek_bar_synchronizes_both_bars_and_playhead(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.controller.load_sample_project()
+    window.resize(1280, 720)
+    window.show()
+    qtbot.wait(20)
+
+    preview_seek = window.findChild(QSlider, "E-PREVIEW-SEEK")
+    timeline_ruler = window.findChild(QSlider, "E-TIMELINE-RULER")
+    global_playhead = window.findChild(QWidget, "E-TIMELINE-GLOBAL-PLAYHEAD")
+
+    assert preview_seek is not None
+    assert timeline_ruler is not None
+    assert global_playhead is not None
+
+    qtbot.mouseClick(
+        timeline_ruler,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(timeline_ruler.width() // 4, timeline_ruler.height() // 2),
+    )
+    qtbot.wait(10)
+
+    first_position = window.controller.state.playhead_ms
+    assert first_position == timeline_ruler.value()
+    assert preview_seek.value() == first_position
+    assert abs(first_position - round(window.controller.state.total_duration_ms / 4)) <= 100
+
+    qtbot.mouseClick(
+        preview_seek,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(preview_seek.width() * 3 // 4, preview_seek.height() // 2),
+    )
+    qtbot.wait(10)
+
+    second_position = window.controller.state.playhead_ms
+    assert second_position == preview_seek.value()
+    assert timeline_ruler.value() == second_position
+    assert abs(second_position - round(window.controller.state.total_duration_ms * 3 / 4)) <= 100
+    assert global_playhead._x >= 0
 
 
 def test_required_screen_regions_fit_at_supported_window_sizes(qtbot) -> None:

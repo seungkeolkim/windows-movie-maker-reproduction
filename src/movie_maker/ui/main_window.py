@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QDropEvent,
     QIcon,
     QKeySequence,
+    QMouseEvent,
     QPainter,
     QPixmap,
     QPolygon,
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStatusBar,
+    QStyle,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
@@ -166,6 +168,47 @@ class _TimelineListWidget(QListWidget):
             event.accept()
             return
         super().wheelEvent(event)
+
+
+class _SeekSlider(QSlider):
+    """A horizontal seek control that jumps on click and continues dragging."""
+
+    def _position_value(self, event: QMouseEvent) -> int:
+        return QStyle.sliderValueFromPosition(
+            self.minimum(),
+            self.maximum(),
+            round(event.position().x()),
+            max(self.width() - 1, 1),
+        )
+
+    def _publish_position(self, event: QMouseEvent) -> None:
+        value = self._position_value(event)
+        self.setSliderPosition(value)
+        self.sliderMoved.emit(value)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() is Qt.MouseButton.LeftButton:
+            self.setSliderDown(True)
+            self._publish_position(event)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self.isSliderDown() and event.buttons() & Qt.MouseButton.LeftButton:
+            self._publish_position(event)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() is Qt.MouseButton.LeftButton and self.isSliderDown():
+            self._publish_position(event)
+            self.setSliderDown(False)
+            self.sliderReleased.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class _TimelinePlayhead(QWidget):
@@ -459,7 +502,7 @@ class MainWindow(QMainWindow):
         self.preview_time.setObjectName("E-PREVIEW-TIME")
         self.preview_time.setMinimumWidth(150)
         controls.addWidget(self.preview_time)
-        self.preview_seek = QSlider(Qt.Orientation.Horizontal)
+        self.preview_seek = _SeekSlider(Qt.Orientation.Horizontal)
         self.preview_seek.setObjectName("E-PREVIEW-SEEK")
         self.preview_seek.setAccessibleName("프로젝트 재생 위치")
         self.preview_seek.sliderMoved.connect(self._seek_preview)
@@ -568,7 +611,7 @@ class MainWindow(QMainWindow):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.timeline_ruler_scroll.setFixedHeight(30)
-        self.timeline_ruler = QSlider(Qt.Orientation.Horizontal)
+        self.timeline_ruler = _SeekSlider(Qt.Orientation.Horizontal)
         self.timeline_ruler.setObjectName("E-TIMELINE-RULER")
         self.timeline_ruler.setAccessibleName("타임라인 눈금과 재생 헤드")
         self.timeline_ruler.setTickPosition(QSlider.TickPosition.TicksBelow)
