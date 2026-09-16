@@ -333,6 +333,7 @@ class MainWindow(QMainWindow):
         self._preview_error_key: tuple[object, ...] | None = None
         self._preview_error_text: str | None = None
         self._preview_project: Project | None = None
+        self._replace_next_preview_request = False
         self._audio_bridge = AudioPreviewBridge(audio_coordinator, self)
         self._audio_output = audio_output or QtAudioOutput(self)
         self._audio_graph: AudioGraph | None = None
@@ -1521,7 +1522,9 @@ class MainWindow(QMainWindow):
         self.preview_stack.setCurrentIndex(0 if not state.assets else 1)
         self._refresh_library()
         self._refresh_timeline()
-        self._refresh_preview(replace_request=project_changed)
+        replace_preview = project_changed or self._replace_next_preview_request
+        self._replace_next_preview_request = False
+        self._refresh_preview(replace_request=replace_preview)
         self._refresh_audio(replace_request=project_changed)
         self._refresh_inspector()
         self._refresh_actions()
@@ -1939,16 +1942,12 @@ class MainWindow(QMainWindow):
         ).target
 
     def _seek_preview(self, position_ms: int) -> None:
+        self._replace_next_preview_request = True
         self.controller.seek(position_ms)
-        target = self._current_preview_target()
-        if target is not None:
-            self._preview_bridge.request(target, replace=True)
 
     def _step_preview(self, direction: int) -> None:
+        self._replace_next_preview_request = True
         self.controller.step_frame(direction)
-        target = self._current_preview_target()
-        if target is not None:
-            self._preview_bridge.request(target, replace=True)
 
     def _toggle_preview_playback(self) -> bool:
         return self.controller.toggle_playback()

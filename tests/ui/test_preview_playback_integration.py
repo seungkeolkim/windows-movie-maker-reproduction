@@ -151,8 +151,11 @@ def test_qt_preview_renders_decoded_frame_and_space_controls_real_clock(qtbot, t
     assert controller.state.is_playing
     window._actions["play_pause"].trigger()
     assert not controller.state.is_playing
-    controller.seek(500)
+    qtbot.waitUntil(lambda: not window._preview_bridge._busy)
+    request_count = len(decoder.targets)
+    window._seek_preview(500)
     qtbot.waitUntil(lambda: decoder.targets[-1].source_time == ProjectTime.from_milliseconds(500))
+    assert len(decoder.targets) == request_count + 1
 
     assert (controller.media_project, controller.history_position, controller.state.is_dirty) == before
     window.close()

@@ -20,7 +20,15 @@ from movie_maker.creative.composition import (
 )
 from movie_maker.media.process import resolve_media_tool
 from movie_maker.preview.timeline import FrameTarget
-from movie_maker.project import MediaKind, ProjectTime
+from movie_maker.project import (
+    DEFAULT_BRIGHTNESS,
+    FitMode,
+    MediaKind,
+    ProjectTime,
+    TrackKind,
+    UserRotation,
+    VisualEffectPreset,
+)
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -95,12 +103,40 @@ def format_ffmpeg_timestamp(target: FrameTarget) -> str:
     return f"{seconds}.{remainder:09d}".rstrip("0")
 
 
+def _can_decode_source_directly(target: FrameTarget) -> bool:
+    """Return whether the current project frame is identical to a direct source frame."""
+
+    project = target.project
+    position = target.project_position
+    if project is None or position is None or target.media_kind is not MediaKind.VIDEO:
+        return project is None
+    try:
+        clip = project.clip(target.clip_id)
+    except KeyError:
+        return False
+    if (
+        clip.track is not TrackKind.VISUAL
+        or clip.fit_mode is not FitMode.FIT
+        or clip.user_rotation is not UserRotation.NONE
+        or clip.brightness != DEFAULT_BRIGHTNESS
+        or clip.effect_preset is not VisualEffectPreset.NONE
+        or project.transitions
+    ):
+        return False
+    return not any(
+        text_clip.timeline_start <= position < text_clip.timeline_end
+        and text_clip.text is not None
+        and bool(text_clip.text.content)
+        for text_clip in project.track(TrackKind.TEXT).clips
+    )
+
+
 def ffmpeg_frame_arguments(executable: str, target: FrameTarget) -> tuple[str, ...]:
     """Build the shell-free one-frame decoding argv."""
 
-    if target.project is not None and target.project_position is not None:
+    if not _can_decode_source_directly(target):
         return ffmpeg_composition_frame_arguments(executable, target)
-    return (
+    arguments = [
         executable,
         "-v",
         "error",
@@ -111,6 +147,24 @@ def ffmpeg_frame_arguments(executable: str, target: FrameTarget) -> tuple[str, .
         target.source_path,
         "-map",
         f"0:{target.stream_index}",
+    ]
+    if target.project is not None:
+        media = target.project.media_reference(target.asset_id)
+        width = target.project.canvas.width or media.width
+        height = target.project.canvas.height or media.height
+        if width is not None and height is not None:
+            arguments.extend(
+                (
+                    "-vf",
+                    (
+                        f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
+                        "force_divisible_by=2:reset_sar=1,"
+                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x20242b,setsar=1"
+                    ),
+                )
+            )
+    arguments.extend(
+        (
         "-frames:v",
         "1",
         "-an",
@@ -121,7 +175,9 @@ def ffmpeg_frame_arguments(executable: str, target: FrameTarget) -> tuple[str, .
         "-c:v",
         "png",
         "pipe:1",
+        )
     )
+    return tuple(arguments)
 
 
 def ffmpeg_composition_frame_arguments(
