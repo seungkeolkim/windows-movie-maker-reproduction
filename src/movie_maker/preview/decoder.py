@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
 from pathlib import Path
-from threading import Event
-from typing import Protocol
+from threading import Event, Thread
+from typing import BinaryIO, Protocol, cast
 
 from movie_maker.audio import format_audio_time
 from movie_maker.creative.composition import (
@@ -19,10 +19,11 @@ from movie_maker.creative.composition import (
     composition_video_filter,
 )
 from movie_maker.media.process import resolve_media_tool
-from movie_maker.preview.timeline import FrameTarget
+from movie_maker.preview.timeline import FrameTarget, frame_at_project_time
 from movie_maker.project import (
     DEFAULT_BRIGHTNESS,
     FitMode,
+    FrameRate,
     MediaKind,
     ProjectTime,
     TrackKind,
@@ -63,6 +64,7 @@ class PreviewDecodeCancelled:
 
 
 type PreviewDecodeResult = DecodedFrame | PreviewDecodeFailure | PreviewDecodeCancelled
+type PreviewStreamResult = PreviewDecodeFailure | PreviewDecodeCancelled | None
 
 
 class RunningProcess(Protocol):
@@ -83,6 +85,22 @@ class ProcessLauncher(Protocol):
     def __call__(self, arguments: Sequence[str]) -> RunningProcess: ...
 
 
+class StreamingProcess(Protocol):
+    returncode: int | None
+    stdout: BinaryIO | None
+    stderr: BinaryIO | None
+
+    def terminate(self) -> None: ...
+
+    def kill(self) -> None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
+
+
+class StreamProcessLauncher(Protocol):
+    def __call__(self, arguments: Sequence[str]) -> StreamingProcess: ...
+
+
 def _launch_process(arguments: Sequence[str]) -> RunningProcess:
     return subprocess.Popen(
         tuple(arguments),
@@ -90,6 +108,20 @@ def _launch_process(arguments: Sequence[str]) -> RunningProcess:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         shell=False,
+    )
+
+
+def _launch_stream_process(arguments: Sequence[str]) -> StreamingProcess:
+    return cast(
+        StreamingProcess,
+        subprocess.Popen(
+            tuple(arguments),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            bufsize=0,
+        ),
     )
 
 
@@ -165,8 +197,65 @@ def ffmpeg_frame_arguments(executable: str, target: FrameTarget) -> tuple[str, .
             )
     arguments.extend(
         (
-        "-frames:v",
-        "1",
+            "-frames:v",
+            "1",
+            "-an",
+            "-sn",
+            "-dn",
+            "-f",
+            "image2pipe",
+            "-c:v",
+            "png",
+            "pipe:1",
+        )
+    )
+    return tuple(arguments)
+
+
+def ffmpeg_playback_arguments(executable: str, target: FrameTarget) -> tuple[str, ...] | None:
+    """Build one persistent direct-source playback process for the current clip."""
+
+    if not _can_decode_source_directly(target):
+        return None
+    project = target.project
+    position = target.project_position
+    if project is None or position is None:
+        return None
+    clip = project.clip(target.clip_id)
+    remaining = clip.timeline_end - position
+    if remaining.nanoseconds <= 0:
+        return None
+    media = project.media_reference(target.asset_id)
+    width = project.canvas.width or media.width
+    height = project.canvas.height or media.height
+    if width is None or height is None:
+        return None
+    stream = next((item for item in media.streams if item.index == target.stream_index), None)
+    frame_rate = stream.average_frame_rate if stream is not None else None
+    frame_rate = frame_rate or FrameRate(30)
+    rate = clip.playback_rate.fraction
+    video_filter = (
+        f"setpts=(PTS-STARTPTS)*{rate.denominator}/{rate.numerator},"
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
+        "force_divisible_by=2:reset_sar=1,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x20242b,"
+        f"fps={frame_rate.numerator}/{frame_rate.denominator}:round=near,setsar=1"
+    )
+    return (
+        executable,
+        "-v",
+        "error",
+        "-nostdin",
+        "-ss",
+        format_ffmpeg_timestamp(target),
+        "-i",
+        target.source_path,
+        "-map",
+        f"0:{target.stream_index}",
+        "-vf",
+        video_filter,
+        "-t",
+        format_audio_time(remaining),
         "-an",
         "-sn",
         "-dn",
@@ -175,9 +264,39 @@ def ffmpeg_frame_arguments(executable: str, target: FrameTarget) -> tuple[str, .
         "-c:v",
         "png",
         "pipe:1",
-        )
     )
-    return tuple(arguments)
+
+
+def _read_exact(stream: BinaryIO, size: int) -> bytes | None:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = stream.read(remaining)
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_png(stream: BinaryIO) -> bytes | None:
+    signature = _read_exact(stream, len(PNG_SIGNATURE))
+    if signature is None:
+        return None
+    if signature != PNG_SIGNATURE:
+        raise ValueError("FFmpeg playback output did not start with a PNG frame.")
+    chunks = [signature]
+    while True:
+        header = _read_exact(stream, 8)
+        if header is None:
+            raise ValueError("FFmpeg playback ended inside a PNG frame.")
+        length = int.from_bytes(header[:4], "big")
+        body = _read_exact(stream, length + 4)
+        if body is None:
+            raise ValueError("FFmpeg playback ended inside a PNG chunk.")
+        chunks.extend((header, body))
+        if header[4:] == b"IEND":
+            return b"".join(chunks)
 
 
 def ffmpeg_composition_frame_arguments(
@@ -266,12 +385,131 @@ class FfmpegFrameDecoder:
         executable: str | None = None,
         timeout: float = 10.0,
         launcher: ProcessLauncher = _launch_process,
+        stream_launcher: StreamProcessLauncher = _launch_stream_process,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._executable = executable or resolve_media_tool("ffmpeg")
         self._timeout = timeout
         self._launcher = launcher
+        self._stream_launcher = stream_launcher
         self._monotonic = monotonic
+
+    def can_stream(self, target: FrameTarget) -> bool:
+        return ffmpeg_playback_arguments(self._executable, target) is not None
+
+    def stream(
+        self,
+        target: FrameTarget,
+        cancelled: Event,
+        publish: Callable[[DecodedFrame], bool],
+    ) -> PreviewStreamResult:
+        """Decode sequential playback frames from one persistent FFmpeg process."""
+
+        arguments = ffmpeg_playback_arguments(self._executable, target)
+        if arguments is None or target.project is None or target.project_position is None:
+            return PreviewDecodeFailure(
+                target,
+                PreviewDecodeErrorCode.INVALID_COMPOSITION,
+                "이 구간은 지속형 미리 보기로 재생할 수 없습니다.",
+            )
+        if not Path(target.source_path).is_file():
+            return PreviewDecodeFailure(
+                target,
+                PreviewDecodeErrorCode.SOURCE_NOT_FOUND,
+                f"원본 파일을 찾을 수 없습니다. ({target.source_path})",
+            )
+        try:
+            process = self._stream_launcher(arguments)
+        except FileNotFoundError as error:
+            return PreviewDecodeFailure(
+                target,
+                PreviewDecodeErrorCode.FFMPEG_NOT_FOUND,
+                "FFmpeg를 찾을 수 없습니다. 실행 환경을 점검하세요.",
+                str(error),
+            )
+        except OSError as error:
+            return PreviewDecodeFailure(
+                target,
+                PreviewDecodeErrorCode.INTERNAL_ERROR,
+                "지속형 미리 보기 디코더를 시작하지 못했습니다.",
+                str(error),
+            )
+        if process.stdout is None:
+            process.kill()
+            process.wait()
+            return PreviewDecodeFailure(
+                target,
+                PreviewDecodeErrorCode.INTERNAL_ERROR,
+                "지속형 미리 보기 출력을 열 수 없습니다.",
+            )
+
+        stopped = Event()
+
+        def terminate_when_cancelled() -> None:
+            while not stopped.wait(0.05):
+                if cancelled.is_set():
+                    if process.returncode is None:
+                        process.terminate()
+                    return
+
+        watcher = Thread(
+            target=terminate_when_cancelled,
+            name="movie-maker-preview-cancel",
+            daemon=True,
+        )
+        watcher.start()
+        project = target.project
+        start = target.project_position
+        media = project.media_reference(target.asset_id)
+        stream = next((item for item in media.streams if item.index == target.stream_index), None)
+        frame_rate = stream.average_frame_rate if stream is not None else None
+        frame_rate = frame_rate or FrameRate(30)
+        frame_index = 0
+        failure: PreviewDecodeFailure | None = None
+        try:
+            while not cancelled.is_set():
+                try:
+                    png_bytes = _read_png(process.stdout)
+                except (OSError, ValueError) as error:
+                    if not cancelled.is_set():
+                        failure = PreviewDecodeFailure(
+                            target,
+                            PreviewDecodeErrorCode.INVALID_FRAME,
+                            "연속 미리 보기 프레임을 읽지 못했습니다.",
+                            str(error),
+                        )
+                    break
+                if png_bytes is None:
+                    break
+                position = start + frame_rate.time_at_frame(frame_index)
+                preview = frame_at_project_time(project, min(position, project.duration))
+                if preview.target is None or preview.target.clip_id != target.clip_id:
+                    break
+                if not publish(DecodedFrame(preview.target, png_bytes)):
+                    cancelled.set()
+                    break
+                frame_index += 1
+        finally:
+            stopped.set()
+            if process.returncode is None:
+                try:
+                    process.wait(timeout=0.25)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+        if cancelled.is_set():
+            return PreviewDecodeCancelled(target)
+        if failure is not None:
+            return failure
+        stderr = process.stderr.read() if process.stderr is not None else b""
+        if process.returncode != 0:
+            return PreviewDecodeFailure(
+                target,
+                PreviewDecodeErrorCode.PROCESS_FAILED,
+                "연속 미리 보기 디코딩에 실패했습니다.",
+                _detail(stderr),
+            )
+        return None
 
     def decode(self, target: FrameTarget, cancelled: Event) -> PreviewDecodeResult:
         source_paths = [target.source_path]

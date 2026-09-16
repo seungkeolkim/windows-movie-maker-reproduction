@@ -1835,6 +1835,9 @@ class MainWindow(QMainWindow):
                 error=True,
             )
             return
+        if state.is_playing and self._preview_bridge.play(target):
+            return
+        self._preview_bridge.stop_playback()
         if self._preview_frame_key == target.cache_key and self._preview_png is not None:
             self._render_preview_pixmap()
             return
@@ -1956,6 +1959,19 @@ class MainWindow(QMainWindow):
         if not isinstance(frame, DecodedFrame):
             return
         current = self._current_preview_target()
+        if self._preview_bridge.streaming:
+            if (
+                current is None
+                or current.project_id != frame.target.project_id
+                or current.clip_id != frame.target.clip_id
+            ):
+                return
+            self._preview_png = frame.png_bytes
+            self._preview_frame_key = frame.target.cache_key
+            self._preview_error_key = None
+            self._preview_error_text = None
+            self._render_preview_pixmap()
+            return
         if current is None or current.cache_key != frame.target.cache_key:
             if current is not None:
                 self._preview_bridge.request(current)

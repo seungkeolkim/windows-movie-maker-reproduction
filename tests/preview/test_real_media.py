@@ -9,7 +9,12 @@ from threading import Event
 from PySide6.QtGui import QImage
 
 from movie_maker.media import FfprobeAnalyzer, MediaAnalysisSuccess
-from movie_maker.preview import DecodedFrame, FfmpegFrameDecoder, frame_at_project_time
+from movie_maker.preview import (
+    DecodedFrame,
+    FfmpegFrameDecoder,
+    PreviewDecodeCancelled,
+    frame_at_project_time,
+)
 from movie_maker.project import CommandExecutor, Project, ProjectTime
 from movie_maker.timeline import AddMediaClip
 
@@ -90,5 +95,16 @@ def test_actual_video_and_photo_frames_decode_without_modifying_sources(tmp_path
         decoded = decoder.decode(target, Event())
         assert isinstance(decoded, DecodedFrame)
         assert not QImage.fromData(decoded.png_bytes).isNull()
+
+    streamed: list[DecodedFrame] = []
+
+    def receive(frame: DecodedFrame) -> bool:
+        streamed.append(frame)
+        return len(streamed) < 3
+
+    streamed_result = decoder.stream(video_target, Event(), receive)
+    assert isinstance(streamed_result, PreviewDecodeCancelled)
+    assert len(streamed) == 3
+    assert all(not QImage.fromData(frame.png_bytes).isNull() for frame in streamed)
 
     assert {path: _fingerprint(path) for path in before} == before

@@ -30,7 +30,27 @@ class PreviewBridge(QObject):
         self._closed = False
         self._active_key: tuple[object, ...] | None = None
         self._pending: FrameTarget | None = None
+        self._streaming = False
         self._worker_result.connect(self._deliver)
+
+    @property
+    def streaming(self) -> bool:
+        return self._streaming
+
+    def play(self, target: FrameTarget) -> bool:
+        if self._closed:
+            return False
+        try:
+            self._streaming = self._coordinator.play(target, self._worker_result.emit)
+        except RuntimeError:
+            self._streaming = False
+        return self._streaming
+
+    def stop_playback(self) -> None:
+        if not self._streaming:
+            return
+        self._streaming = False
+        self._coordinator.stop_playback()
 
     def request(self, target: FrameTarget, *, replace: bool = False) -> None:
         """Request a frame, coalescing normal playback and replacing explicit seeks."""
@@ -63,6 +83,7 @@ class PreviewBridge(QObject):
         if isinstance(result, DecodedFrame):
             self.frame_ready.emit(result)
         elif isinstance(result, PreviewDecodeFailure):
+            self._streaming = False
             self.frame_failed.emit(result)
         pending = self._pending
         self._pending = None
@@ -74,6 +95,7 @@ class PreviewBridge(QObject):
                 self._submit(pending)
 
     def cancel(self, *, clear_cache: bool = False) -> None:
+        self._streaming = False
         self._pending = None
         self._busy = False
         self._active_key = None
@@ -85,5 +107,6 @@ class PreviewBridge(QObject):
         if self._closed:
             return
         self._closed = True
+        self._streaming = False
         self._pending = None
         self._coordinator.close()

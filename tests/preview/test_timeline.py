@@ -8,6 +8,7 @@ import pytest
 from movie_maker.preview import (
     PlaybackClock,
     ffmpeg_frame_arguments,
+    ffmpeg_playback_arguments,
     format_ffmpeg_timestamp,
     frame_at_project_time,
     step_project_frame,
@@ -189,6 +190,12 @@ def test_time_base_start_pts_and_clip_boundaries_are_preserved() -> None:
     assert arguments[arguments.index("-ss") + 1] == format_ffmpeg_timestamp(boundary.target)
     assert arguments[arguments.index("-i") + 1] == second_media.source_path
     assert "-filter_complex" not in arguments
+    playback_arguments = ffmpeg_playback_arguments("ffmpeg", boundary.target)
+    assert playback_arguments is not None
+    assert playback_arguments[playback_arguments.index("-ss") + 1] == (
+        format_ffmpeg_timestamp(boundary.target)
+    )
+    assert "-frames:v" not in playback_arguments
     expected_pts = 18_000 + (
         second_in.to_fractional_seconds() // MediaTimeBase(1, 90_000).seconds_per_tick
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from threading import Event
 
 from movie_maker.preview import (
@@ -44,6 +45,29 @@ class _ControlledDecoder:
         if cancelled.is_set():
             return PreviewDecodeCancelled(target)
         return DecodedFrame(target, PNG_BYTES)
+
+
+class _StreamingDecoder:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.started = Event()
+        self.cancelled: Event | None = None
+
+    def can_stream(self, target) -> bool:
+        return True
+
+    def decode(self, target, cancelled):
+        raise AssertionError("single-frame decoding should not be used")
+
+    def stream(self, target, cancelled, publish):
+        self.calls += 1
+        self.cancelled = cancelled
+        self.started.set()
+        assert publish(DecodedFrame(target, PNG_BYTES))
+        later = replace(target, project_position=ProjectTime.from_milliseconds(100))
+        publish(DecodedFrame(later, PNG_BYTES))
+        cancelled.wait(timeout=2)
+        return PreviewDecodeCancelled(target)
 
 
 def test_only_latest_decode_result_is_published_and_old_work_is_cancelled() -> None:
@@ -95,4 +119,33 @@ def test_replacing_a_queued_future_does_not_deadlock_its_done_callback() -> None
 
     assert delivered.wait(timeout=1)
     assert [result.target.clip_id for result in results] == ["latest"]
+    coordinator.close()
+
+
+def test_playback_reuses_one_stream_and_releases_next_frame_at_clock_position() -> None:
+    decoder = _StreamingDecoder()
+    coordinator = PreviewDecodeCoordinator(decoder)
+    results = []
+    first_delivered = Event()
+    delivered = Event()
+    first = replace(_target("old"), project_position=ProjectTime.zero())
+    later = replace(first, project_position=ProjectTime.from_milliseconds(100))
+
+    def receive(frame):
+        results.append(frame)
+        first_delivered.set()
+        if len(results) == 2:
+            delivered.set()
+
+    assert coordinator.play(first, receive)
+    assert decoder.started.wait(timeout=1)
+    assert first_delivered.wait(timeout=1)
+    assert len(results) == 1
+    assert coordinator.play(later, receive)
+
+    assert delivered.wait(timeout=1)
+    assert decoder.calls == 1
+    coordinator.stop_playback()
+    assert decoder.cancelled is not None
+    assert decoder.cancelled.is_set()
     coordinator.close()

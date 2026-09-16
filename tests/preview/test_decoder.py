@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 
 from movie_maker.preview import (
     DecodedFrame,
@@ -13,8 +15,22 @@ from movie_maker.preview import (
     PreviewDecodeErrorCode,
     PreviewDecodeFailure,
     ffmpeg_frame_arguments,
+    frame_at_project_time,
 )
-from movie_maker.project import MediaKind, ProjectTime
+from movie_maker.project import (
+    Canvas,
+    Clip,
+    FrameRate,
+    MediaKind,
+    MediaReference,
+    MediaStream,
+    MediaStreamKind,
+    MediaTimeBase,
+    Project,
+    ProjectTime,
+    TimelineTrack,
+    TrackKind,
+)
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\nactual-frame"
 
@@ -67,6 +83,85 @@ class _Process:
 
     def kill(self) -> None:
         self.killed = True
+
+
+class _BlockingOutput:
+    def __init__(self) -> None:
+        self.started = Event()
+        self.released = Event()
+
+    def read(self, size=-1):
+        self.started.set()
+        self.released.wait(timeout=2)
+        return b""
+
+
+class _StreamingProcess:
+    def __init__(self) -> None:
+        self.stdout = _BlockingOutput()
+        self.stderr = BytesIO()
+        self.returncode = None
+        self.terminated = False
+        self.killed = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = -15
+        self.stdout.released.set()
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+        self.stdout.released.set()
+
+    def wait(self, timeout=None) -> int:
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired("ffmpeg", timeout)
+        return self.returncode
+
+
+def _stream_target(path: Path) -> FrameTarget:
+    stream = MediaStream(
+        index=0,
+        kind=MediaStreamKind.VIDEO,
+        codec_name="h264",
+        time_base=MediaTimeBase(1, 90_000),
+        duration_ts=270_000,
+        average_frame_rate=FrameRate(30),
+    )
+    media = MediaReference(
+        asset_id="video",
+        name=path.name,
+        source_path=str(path),
+        kind=MediaKind.VIDEO,
+        duration=ProjectTime.from_seconds(3),
+        width=640,
+        height=360,
+        primary_stream_index=0,
+        streams=(stream,),
+    )
+    clip = Clip(
+        "clip",
+        TrackKind.VISUAL,
+        "video",
+        "clip",
+        ProjectTime.zero(),
+        ProjectTime.from_seconds(3),
+        source_out=ProjectTime.from_seconds(3),
+    )
+    empty = Project.empty(project_id="stream")
+    project = replace(
+        empty,
+        canvas=Canvas(640, 360, "video"),
+        media=(media,),
+        tracks=tuple(
+            TimelineTrack(track.kind, (clip,) if track.kind is TrackKind.VISUAL else ())
+            for track in empty.tracks
+        ),
+    )
+    target = frame_at_project_time(project, ProjectTime.zero()).target
+    assert target is not None
+    return target
 
 
 def test_ffmpeg_decode_uses_one_argv_stream_and_preserves_source(tmp_path: Path) -> None:
@@ -165,3 +260,26 @@ def test_timeout_terminates_process_and_reports_timeout(tmp_path: Path) -> None:
     assert isinstance(result, PreviewDecodeFailure)
     assert result.code is PreviewDecodeErrorCode.TIMEOUT
     assert process.terminated
+
+
+def test_persistent_playback_process_is_terminated_on_cancel(tmp_path: Path) -> None:
+    source = tmp_path / "video.mp4"
+    source.write_bytes(b"source")
+    process = _StreamingProcess()
+    decoder = FfmpegFrameDecoder(stream_launcher=lambda arguments: process)
+    cancelled = Event()
+    results = []
+    worker = Thread(
+        target=lambda: results.append(
+            decoder.stream(_stream_target(source), cancelled, lambda frame: True)
+        )
+    )
+
+    worker.start()
+    assert process.stdout.started.wait(timeout=1)
+    cancelled.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert process.terminated
+    assert isinstance(results[0], PreviewDecodeCancelled)

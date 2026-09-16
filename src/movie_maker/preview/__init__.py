@@ -8,7 +8,9 @@ from movie_maker.preview.decoder import (
     PreviewDecodeErrorCode,
     PreviewDecodeFailure,
     PreviewDecodeResult,
+    PreviewStreamResult,
     ffmpeg_frame_arguments,
+    ffmpeg_playback_arguments,
     format_ffmpeg_timestamp,
 )
 from movie_maker.preview.timeline import (
@@ -31,7 +33,9 @@ __all__ = [
     "PreviewDecodeFailure",
     "PreviewDecodeResult",
     "PreviewPosition",
+    "PreviewStreamResult",
     "ffmpeg_frame_arguments",
+    "ffmpeg_playback_arguments",
     "format_ffmpeg_timestamp",
     "frame_at_project_time",
     "step_project_frame",
