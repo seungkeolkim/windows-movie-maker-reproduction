@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QPushButton,
+    QSlider,
     QTextEdit,
     QWidget,
 )
@@ -69,6 +70,42 @@ def test_timeline_selection_updates_preview_and_inspector(qtbot) -> None:
     assert window.controller.state.playhead_ms == 8_000
     assert "야시장" in window.inspector_header.text()
     assert "야시장" in window.preview_canvas.text()
+
+
+def test_timeline_ruler_and_global_playhead_share_track_time_scale(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.controller.load_sample_project()
+    window.resize(1280, 720)
+    window.show()
+    qtbot.wait(20)
+
+    ruler = window.findChild(QSlider, "E-TIMELINE-RULER")
+    video_track = window.findChild(QListWidget, "E-TIMELINE-VIDEO-TRACK")
+    global_playhead = window.findChild(QWidget, "E-TIMELINE-GLOBAL-PLAYHEAD")
+
+    assert ruler is not None
+    assert video_track is not None
+    assert global_playhead is not None
+    assert abs(ruler.width() - video_track.viewport().width()) <= 2
+
+    clip_width = sum(
+        video_track.visualItemRect(video_track.item(index)).width()
+        for index in range(video_track.count())
+    )
+    assert abs(clip_width - ruler.width()) <= video_track.count() * 2
+
+    window.controller.seek(7_000)
+    qtbot.wait(10)
+    expected_x = video_track.viewport().mapTo(
+        window.timeline_page, video_track.viewport().rect().topLeft()
+    ).x()
+    expected_x += round(
+        window.controller.state.playhead_ms
+        / window.controller.state.total_duration_ms
+        * ruler.width()
+    )
+    assert global_playhead._x == expected_x
 
 
 def test_required_screen_regions_fit_at_supported_window_sizes(qtbot) -> None:

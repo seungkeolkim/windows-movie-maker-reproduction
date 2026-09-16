@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import Callable, Sequence
 from importlib.metadata import version
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal, qVersion
+from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal, qVersion
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -19,6 +20,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QPainter,
     QPixmap,
+    QPolygon,
     QResizeEvent,
     QWheelEvent,
 )
@@ -120,6 +122,7 @@ ExportPathSelector = Callable[[str], str | None]
 ExportResultOpener = Callable[[str], bool]
 
 AUDIO_PREVIEW_CHUNK = ProjectTime.from_seconds(30)
+LOGGER = logging.getLogger(__name__)
 
 
 class _TimelineListWidget(QListWidget):
@@ -163,6 +166,41 @@ class _TimelineListWidget(QListWidget):
             event.accept()
             return
         super().wheelEvent(event)
+
+
+class _TimelinePlayhead(QWidget):
+    """Paint one project-time cursor through every fixed timeline track."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._x = -1
+        self._top = 0
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+
+    def set_position(self, x: int, top: int) -> None:
+        self._x = x
+        self._top = top
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # type: ignore[no-untyped-def]
+        if self._x < 0:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QColor("#e53935"))
+        painter.setBrush(QColor("#e53935"))
+        painter.drawLine(self._x, self._top + 7, self._x, self.height() - 2)
+        painter.drawPolygon(
+            QPolygon(
+                (
+                    QPoint(self._x - 5, self._top),
+                    QPoint(self._x + 5, self._top),
+                    QPoint(self._x, self._top + 7),
+                )
+            )
+        )
+        painter.end()
 
 
 def _file_patterns(extensions: frozenset[str]) -> str:
@@ -509,19 +547,39 @@ class MainWindow(QMainWindow):
         self.timeline_views = QStackedWidget()
         self.timeline_views.setObjectName("E-TIMELINE-VIEWS")
         timeline_page = QWidget()
+        self.timeline_page = timeline_page
         timeline_layout = QVBoxLayout(timeline_page)
         timeline_layout.setContentsMargins(0, 0, 0, 0)
         timeline_layout.setSpacing(5)
 
+        ruler_row = QHBoxLayout()
+        ruler_row.setContentsMargins(0, 0, 0, 0)
+        ruler_row.setSpacing(0)
+        ruler_spacer = QWidget()
+        ruler_spacer.setFixedWidth(74)
+        ruler_row.addWidget(ruler_spacer)
+        self.timeline_ruler_scroll = QScrollArea()
+        self.timeline_ruler_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.timeline_ruler_scroll.setWidgetResizable(False)
+        self.timeline_ruler_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.timeline_ruler_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.timeline_ruler_scroll.setFixedHeight(30)
         self.timeline_ruler = QSlider(Qt.Orientation.Horizontal)
         self.timeline_ruler.setObjectName("E-TIMELINE-RULER")
         self.timeline_ruler.setAccessibleName("타임라인 눈금과 재생 헤드")
         self.timeline_ruler.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.timeline_ruler.sliderMoved.connect(self._seek_preview)
-        timeline_layout.addWidget(self.timeline_ruler)
+        self.timeline_ruler_scroll.setWidget(self.timeline_ruler)
+        ruler_row.addWidget(self.timeline_ruler_scroll, 1)
+        timeline_layout.addLayout(ruler_row)
 
         for track in TrackKind:
             row = QHBoxLayout()
+            row.setSpacing(0)
             label = QLabel(track.value)
             label.setFixedWidth(74)
             label.setObjectName(f"trackLabel-{track.name.lower()}")
@@ -532,6 +590,8 @@ class MainWindow(QMainWindow):
             track_list.setWrapping(False)
             track_list.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             track_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            track_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            track_list.setSpacing(0)
             track_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
             track_list.setFixedHeight(44)
             track_list.itemSelectionChanged.connect(
@@ -557,8 +617,13 @@ class MainWindow(QMainWindow):
                     )
                 )
             self._timeline_lists[track] = track_list
+            track_list.horizontalScrollBar().valueChanged.connect(
+                lambda value, source=track_list: self._sync_timeline_scroll(source, value)
+            )
             row.addWidget(track_list, 1)
             timeline_layout.addLayout(row)
+        self.timeline_playhead = _TimelinePlayhead(timeline_page)
+        self.timeline_playhead.setObjectName("E-TIMELINE-GLOBAL-PLAYHEAD")
         self.timeline_views.addWidget(timeline_page)
 
         storyboard_page = QWidget()
@@ -1531,6 +1596,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_timeline(self) -> None:
         state = self.controller.state
+        total = state.total_duration_ms
+        viewport_width = max(
+            (widget.viewport().width() for widget in self._timeline_lists.values()),
+            default=1,
+        )
+        timeline_width = max(1, round(viewport_width * state.timeline_zoom / 100))
         for track, widget in self._timeline_lists.items():
             blocker = QSignalBlocker(widget)
             widget.clear()
@@ -1538,9 +1609,17 @@ class MainWindow(QMainWindow):
             if not clips:
                 placeholder = QListWidgetItem("＋ 여기에 미디어 추가")
                 placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
-                placeholder.setSizeHint(QSize(190, 42))
+                placeholder.setSizeHint(QSize(timeline_width, 42))
                 widget.addItem(placeholder)
+            cursor_ms = 0
             for clip in clips:
+                if total > 0 and clip.start_ms > cursor_ms:
+                    spacer = QListWidgetItem()
+                    spacer.setFlags(Qt.ItemFlag.NoItemFlags)
+                    spacer.setData(Qt.ItemDataRole.UserRole + 1, "timeline-gap")
+                    spacer_width = round((clip.start_ms - cursor_ms) / total * timeline_width)
+                    spacer.setSizeHint(QSize(max(1, spacer_width), 36))
+                    widget.addItem(spacer)
                 asset = self.controller.asset_for_clip(clip)
                 icon = self._clip_icon(clip, asset)
                 details = f"{format_time(clip.duration_ms)}"
@@ -1560,9 +1639,14 @@ class MainWindow(QMainWindow):
                 item.setToolTip(
                     f"{track.value} · 시작 {format_time(clip.start_ms)} · 길이 {details}"
                 )
-                width = int(max(120, min(330, clip.duration_ms / 55 * state.timeline_zoom / 100)))
-                item.setSizeHint(QSize(width, 36))
+                width = (
+                    round(clip.duration_ms / total * timeline_width)
+                    if total > 0
+                    else timeline_width
+                )
+                item.setSizeHint(QSize(max(1, width), 36))
                 widget.addItem(item)
+                cursor_ms = max(cursor_ms, clip.start_ms + clip.duration_ms)
                 if clip.clip_id in state.selected_clip_ids:
                     item.setSelected(True)
                 if clip.clip_id == state.selected_clip_id:
@@ -1596,7 +1680,7 @@ class MainWindow(QMainWindow):
             f"음악 {len(state.music_clips)}개 · 내레이션 {len(state.narration_clips)}개 · "
             f"텍스트 {len(state.text_clips)}개 · 재생 위치 {format_time(state.playhead_ms)}"
         )
-        total = state.total_duration_ms
+        self.timeline_ruler.setFixedSize(timeline_width, 28)
         self.timeline_ruler.setRange(0, total)
         self.timeline_ruler.setTickInterval(
             max(1_000, round(max(total, 1_000) / (10 * state.timeline_zoom / 100)))
@@ -1611,6 +1695,45 @@ class MainWindow(QMainWindow):
         zoom_blocker = QSignalBlocker(self.timeline_zoom)
         self.timeline_zoom.setValue(state.timeline_zoom)
         del zoom_blocker
+        QTimer.singleShot(0, self._update_timeline_playhead)
+
+    def _sync_timeline_scroll(self, source: _TimelineListWidget, value: int) -> None:
+        source_maximum = max(source.horizontalScrollBar().maximum(), 1)
+        ratio = value / source_maximum
+        targets = [
+            widget.horizontalScrollBar()
+            for widget in self._timeline_lists.values()
+            if widget is not source
+        ]
+        targets.append(self.timeline_ruler_scroll.horizontalScrollBar())
+        for scrollbar in targets:
+            blocker = QSignalBlocker(scrollbar)
+            scrollbar.setValue(round(ratio * scrollbar.maximum()))
+            del blocker
+        self._update_timeline_playhead()
+
+    def _update_timeline_playhead(self) -> None:
+        if not hasattr(self, "timeline_playhead"):
+            return
+        page = self.timeline_page
+        try:
+            self.timeline_playhead.setGeometry(page.rect())
+            self.timeline_playhead.raise_()
+        except RuntimeError:
+            # A zero-delay layout update may arrive after Qt has destroyed the window.
+            return
+        total = self.controller.state.total_duration_ms
+        if total <= 0 or not self._timeline_lists:
+            self.timeline_playhead.set_position(-1, 0)
+            return
+        reference = self._timeline_lists[TrackKind.VISUAL]
+        origin = reference.viewport().mapTo(page, QPoint(0, 0))
+        timeline_width = self.timeline_ruler.width()
+        offset = reference.horizontalScrollBar().value()
+        x = origin.x() + round(self.controller.state.playhead_ms / total * timeline_width) - offset
+        top = self.timeline_ruler_scroll.mapTo(page, QPoint(0, 0)).y()
+        viewport_right = origin.x() + reference.viewport().width()
+        self.timeline_playhead.set_position(x if origin.x() <= x <= viewport_right else -1, top)
 
     def _clip_icon(self, clip: MockClip, asset: MockAsset | None) -> QIcon:
         if asset is not None:
@@ -1708,6 +1831,7 @@ class MainWindow(QMainWindow):
                 duration=AUDIO_PREVIEW_CHUNK,
             )
         except AudioGraphError as error:
+            LOGGER.warning("Audio preview graph could not be built: %s", error)
             self._audio_bridge.cancel()
             self._audio_output.stop()
             self._audio_graph = None
@@ -1741,6 +1865,7 @@ class MainWindow(QMainWindow):
                 channels=decoded.graph.channels,
             )
         except AudioOutputError as error:
+            LOGGER.warning("Audio output failed: %s", error)
             self._audio_failure_key = decoded.graph.cache_key
             self._audio_graph = None
             self.controller.report_status(f"오디오 출력 장치 오류 · {error}")
@@ -1754,12 +1879,14 @@ class MainWindow(QMainWindow):
         self._audio_graph = None
         self._audio_failure_key = failure.graph.cache_key
         self._audio_output.stop()
+        LOGGER.warning("Audio preview decoding failed: %s", failure.message)
         self.controller.report_status(f"오디오 미리 듣기 실패 · {failure.message}")
 
     def _accept_audio_output_failure(self, message: str) -> None:
         if self._audio_graph is not None:
             self._audio_failure_key = self._audio_graph.cache_key
         self._audio_graph = None
+        LOGGER.warning("Audio output device failed: %s", message)
         self.controller.report_status(f"오디오 출력 장치 오류 · {message}")
 
     def _current_preview_target(self) -> FrameTarget | None:
@@ -1809,6 +1936,7 @@ class MainWindow(QMainWindow):
         self._preview_frame_key = None
         self._preview_error_key = failure.target.cache_key
         self._preview_error_text = failure.message
+        LOGGER.warning("Preview decoding failed: %s", failure.message)
         self._show_preview_message(failure.target.clip_label, failure.message, error=True)
         self.controller.report_status(f"미리 보기 실패 · {failure.message}")
 
@@ -2567,6 +2695,7 @@ class MainWindow(QMainWindow):
 
     def _show_project_error(self, heading: str) -> None:
         detail = self.controller.last_persistence_error or "파일을 확인하고 다시 시도하세요."
+        LOGGER.error("Project operation failed (%s): %s", heading, detail)
         dialog = DecisionDialog(
             title="프로젝트 파일 오류",
             heading=heading,
@@ -2651,6 +2780,7 @@ class MainWindow(QMainWindow):
                 preset_value,
             )
         except ExportPlanError as error:
+            LOGGER.warning("Export plan could not be created: %s", error)
             self.controller.fail_export(str(error))
             return
         if Path(plan.target_path).exists():
@@ -2686,6 +2816,7 @@ class MainWindow(QMainWindow):
                 frame_rate=plan.frame_rate,
             )
         except ExportPlanError as error:
+            LOGGER.warning("Overwrite export plan could not be created: %s", error)
             self.controller.fail_export(str(error))
             return
         self._start_export_plan(confirmed)
@@ -2696,6 +2827,7 @@ class MainWindow(QMainWindow):
         try:
             self._export_bridge.start(plan)
         except (ExportBusyError, RuntimeError) as error:
+            LOGGER.exception("Export worker could not be started")
             self.controller.fail_export(
                 "이미 동영상을 저장하고 있습니다.",
                 str(error),
@@ -2717,13 +2849,16 @@ class MainWindow(QMainWindow):
 
     def _accept_export_result(self, value: object) -> None:
         if isinstance(value, ExportSucceeded):
+            LOGGER.info("Export completed elapsed_seconds=%.3f", value.elapsed_seconds)
             self.controller.complete_export(
                 value.output_path,
                 elapsed_ms=round(value.elapsed_seconds * 1_000),
             )
         elif isinstance(value, ExportFailed):
+            LOGGER.error("Export failed: %s; %s", value.message, value.detail)
             self.controller.fail_export(value.message, value.detail)
         elif isinstance(value, ExportCancelled):
+            LOGGER.info("Export cancelled")
             self.controller.complete_export_cancellation()
         else:
             return
@@ -2964,6 +3099,8 @@ class MainWindow(QMainWindow):
             self.inspector_dock.show()
         if self._preview_png is not None:
             self._render_preview_pixmap()
+        if hasattr(self, "timeline_page"):
+            QTimer.singleShot(0, self._refresh_timeline)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(

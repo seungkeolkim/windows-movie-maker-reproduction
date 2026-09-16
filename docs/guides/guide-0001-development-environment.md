@@ -193,6 +193,18 @@ uv --managed-python run --locked --no-sync -- movie-maker
 제거를 막는다. `.venv`가 없거나 의존성이 맞지 않으면 운영체제에 맞는 설정 스크립트를 다시
 사용한다.
 
+Python 애플리케이션은 실행 방식과 관계없이 `platformdirs`의 사용자 로그 위치에
+`app-<시각>-<프로세스>.log`를 만든다. Windows 기본 위치는 다음과 같다.
+
+```text
+%LOCALAPPDATA%\OpenAI\MovieMakerReproduction\Logs
+```
+
+앱 로그에는 시작·종료, 복구 런타임 초기화 실패, 시작 프로젝트 열기 실패, 처리되지 않은 Python
+예외와 Qt 진단이 기록된다. 사용자 프로필 경로와 일반적인 비밀값 형식은 가리고, 로그는 자동
+전송하지 않는다. `app-*.log`는 14일/10MiB 범위에서 정리하며 로그 쓰기 실패는 실행을 막지
+않는다. 같은 폴더의 `launcher-*.log`는 네이티브 런처가 별도로 관리한다.
+
 ## 개발 검사
 
 `setup.ps1 -Dev` 또는 `setup.sh --dev`로 구성한 환경에서 실행한다.
@@ -243,13 +255,27 @@ MovieMakerLauncher.exe -- --project "C:\Videos\여행 프로젝트.mmrproj"
 `%LOCALAPPDATA%\OpenAI\MovieMakerReproduction\Logs`다. 유지관리 화면에서 새 패키지로
 명시적 업데이트하거나 제거할 수 있으며, 제거는 사용자 프로젝트와 원본 미디어를 보존한다.
 
-릴리스 빌드는 MSVC Developer PowerShell 또는 검증된 portable Zig가 있는 개발 컴퓨터에서
-실행한다. 이 도구들은 사용자 패키지에 포함하지 않는다.
+릴리스 빌드는 Visual Studio Build Tools의 **Desktop development with C++** 워크로드와
+Windows SDK가 설치된 개발 컴퓨터에서 실행한다. 일반 PowerShell에서는 `vswhere.exe`로 설치
+위치를 찾고 `Launch-VsDevShell.ps1`을 호출해 현재 셸에 x64 MSVC 환경을 불러온다.
 
 ```powershell
-.\launcher\build.ps1 -ZigPath C:\Tools\zig\zig.exe
-.\scripts\packaging\build-windows.ps1 -ZigPath C:\Tools\zig\zig.exe
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$vsPath = & $vswhere -latest -products * `
+  -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+  -property installationPath
+if (-not $vsPath) { throw "MSVC C++ Build Tools를 찾지 못했습니다." }
+& "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" `
+  -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+
+Get-Command cl.exe, rc.exe -ErrorAction Stop
+.\launcher\build.ps1
+.\scripts\packaging\build-windows.ps1
 ```
+
+MSVC 초기화는 현재 PowerShell 창에만 적용되므로 새 창에서는 다시 실행한다. 검증된 portable
+Zig를 이미 사용하는 환경에서는 각 빌드 스크립트의 `-ZigPath` 대안을 사용할 수 있다. 빌드
+도구는 릴리스 제작에만 필요하며 사용자 배포 패키지에는 포함하지 않는다.
 
 관련 결정과 세부 계약은 다음 문서를 따른다.
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import Sequence
 from functools import partial
@@ -16,6 +17,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication
 
 from movie_maker import __version__
+from movie_maker.diagnostics import close_application_logging, configure_application_logging
 from movie_maker.media import MediaLibrary
 from movie_maker.runtime import W10Runtime
 from movie_maker.ui.main_window import MainWindow
@@ -64,28 +66,48 @@ def run(
 ) -> int:
     """Run the environment check or show the desktop editor."""
 
-    app = create_application()
-    app.setProperty("onlineMode", online)
-    if check_only:
-        print("\n".join(runtime_report()))
-        return 0
-
-    runtime: W10Runtime | None = None
+    log_path = configure_application_logging()
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "Application startup version=%s check_only=%s online=%s log_available=%s",
+        __version__,
+        check_only,
+        online,
+        log_path is not None,
+    )
     try:
-        runtime = W10Runtime.create()
-    except (OSError, RuntimeError, ValueError):
-        # App-owned recovery metadata must never prevent direct project editing.
-        runtime = None
-    library = MediaLibrary.create_background_default() if runtime is not None else None
-    controller = MockController(media_library=library, runtime=runtime)
-    if project_path is not None and not controller.open_project(project_path):
-        detail = controller.last_persistence_error or "Unknown project read error."
-        print(f"Unable to open project: {detail}", file=sys.stderr)
+        app = create_application()
+        app.setProperty("onlineMode", online)
+        if check_only:
+            print("\n".join(runtime_report()))
+            logger.info("Runtime check completed")
+            return 0
+
+        runtime: W10Runtime | None = None
+        try:
+            runtime = W10Runtime.create()
+        except (OSError, RuntimeError, ValueError):
+            # App-owned recovery metadata must never prevent direct project editing.
+            logger.exception("Recovery and background runtime initialization failed")
+            runtime = None
+        library = MediaLibrary.create_background_default() if runtime is not None else None
+        controller = MockController(media_library=library, runtime=runtime)
+        if project_path is not None and not controller.open_project(project_path):
+            detail = controller.last_persistence_error or "Unknown project read error."
+            logger.error("Startup project could not be opened: %s", detail)
+            print(f"Unable to open project: {detail}", file=sys.stderr)
+            if runtime is not None:
+                runtime.close(clean_exit=True)
+            return 2
+        window = MainWindow(controller)
         if runtime is not None:
-            runtime.close(clean_exit=True)
-        return 2
-    window = MainWindow(controller)
-    if runtime is not None:
-        app.aboutToQuit.connect(partial(runtime.close, clean_exit=True))
-    window.show()
-    return app.exec()
+            app.aboutToQuit.connect(partial(runtime.close, clean_exit=True))
+        window.show()
+        exit_code = app.exec()
+        logger.info("Application event loop stopped exit_code=%s", exit_code)
+        return exit_code
+    except BaseException:
+        logger.exception("Application terminated because of an unhandled exception")
+        raise
+    finally:
+        close_application_logging()
