@@ -1,256 +1,40 @@
 # Windows Movie Maker Reproduction
 
-> 사라진 Windows Movie Maker의 간결한 편집 경험을 오늘의 Windows 환경에 되살리는 데스크톱 영상 편집기
+> 사라진 Windows Movie Maker의 간결한 편집 경험을 오늘의 환경에 되살리는 데스크톱 영상 편집기
 
-이 프로젝트는 영상 편집을 처음 접하는 사람도 미디어를 불러오고, 필요한 부분만 남기고, 순서를 정하고, 음악과 자막을 더해 하나의 동영상으로 저장할 수 있게 만드는 것을 목표로 합니다. 전문 편집기의 복잡한 기능을 따라가기보다 **쉽게 배우고 빠르게 완성하는 경험**에 집중합니다.
+Windows Movie Maker Reproduction은 영상 편집을 처음 접하는 사람도 영상·사진·음악을
+불러오고, 필요한 부분을 자르고 순서를 정한 뒤 자막과 효과를 더해 MP4로 저장할 수 있게 만드는
+비공식 독립 프로젝트입니다. 전문 편집기의 복잡한 기능보다 **쉽게 배우고 빠르게 완성하는
+경험**에 집중하며, 원본 미디어를 수정하지 않는 비파괴 편집 방식을 사용합니다.
 
-현재는 실행 환경 스캐폴딩, MVP·1.0 화면 계약을 검증하는 인터랙티브 Qt 목업, W-01 프로젝트
-코어, W-02 실제 미디어 보관함, W-03 프로젝트 저장·열기, W-04 타임라인 편집, W-05 실제
-영상 미리 보기, W-06 원본음·음악 믹싱, W-07 MP4 출력, W-08 고급 타임라인, W-09 창작
-기능, W-10 자동 저장·복구·백그라운드 작업과 W-11 Windows 런처·설치 흐름까지 구현되어
-있습니다. 로컬 영상·사진·오디오를 분석해 고정 트랙에 추가하고, 클립 이동·삭제·분할·트리밍,
-사진 길이와 영상 속도 변경을 실행 취소·다시 실행할 수 있습니다. 결과는 `schema_version`이
-있는 UTF-8 JSON 파일에 원자적으로 저장됩니다. 영상·사진 프레임과 영상 원본음·배경 음악의
-재생·탐색은 실제 FFmpeg 디코딩을 사용합니다. 편집 결과는 원본 유지·720p·1080p의
-H.264/AAC MP4로 비동기 출력하며 진행률, 취소, 검증과 안전한 파일 교체를 지원합니다.
-마이크 내레이션과 3버스 믹서·페이드·더킹, 제목·캡션·크레딧, 맞춤·채움·회전·밝기·효과와
-인접 전환은 저장 가능한 명령이며 미리 보기와 출력이 같은 합성 계획을 사용합니다.
+현재 미디어 가져오기, 타임라인 편집, 실제 영상·오디오 미리 보기, 프로젝트 저장·복구,
+내레이션·텍스트·전환·시각 효과, H.264/AAC MP4 출력과 Windows 설치 흐름이 구현되어 있습니다.
+첫 사용 가능 버전은 아직 정식 배포되지 않았습니다.
 
-## 문서 읽기 안내
+## 설치
 
-이 README는 제품 목표, 현재 상태, 실행 방법과 전체 로드맵을 설명하는 첫 진입점입니다. 세부
-문서는 [프로젝트 문서 안내](docs/README.md)에서 권장 읽기 순서와 목적별 경로를 확인합니다.
+### Windows 배포 패키지
 
-- 사용자, 대표 시나리오와 MVP 범위를 이해하려면
-  [PRODUCT-0001](docs/product/product-0001-ui-design-baseline.md)을 읽습니다.
-- 프로그램의 전체 기능과 기능별 우선순위·제약을 확인하려면
-  [PRODUCT-0002](docs/product/product-0002-feature-inventory.md)를 읽습니다.
-- 기능 정의부터 UI 목업 검토까지의 작업 절차를 이해하려면
-  [WORKFLOW-0001](docs/workflows/workflow-0001-feature-ui-mockup.md)을 읽습니다.
-- 확정된 화면·요소·상태를 구현하려면 [DESIGN-0001](docs/design/design-0001-screen-layout.md),
-  [DESIGN-0002](docs/design/design-0002-element-functions.md),
-  [MOCK-0001](docs/mock/mock-0001-behavior-specification.md)을 순서대로 읽습니다.
-- 목업 검증과 실제 로직 연결 순서는 [MOCK-0002](docs/mock/mock-0002-validation-scenarios.md)와
-  [MOCK-0003](docs/mock/mock-0003-review-log.md)을 확인합니다.
-- 프로젝트 시간, 스키마와 명령 실행기의 현재 계약은
-  [DESIGN-0003](docs/design/design-0003-project-core-contract.md)과
-  [ADR-0003](docs/decisions/adr-0003-project-core-state-and-storage.md)을 확인합니다.
-- 실제 파일 분석, 부분 성공, 중복과 썸네일·제거 경계는
-  [DESIGN-0004](docs/design/design-0004-media-library-contract.md)를 확인합니다.
-- 실제 타임라인 편집, 경계 스냅과 리플 규칙은
-  [DESIGN-0006](docs/design/design-0006-timeline-editing-contract.md)을 확인합니다.
-- 원본음·음악의 지속 상태, 공통 FFmpeg 그래프와 미리 듣기 경계는
-  [DESIGN-0008](docs/design/design-0008-audio-mixing-contract.md)을 확인합니다.
-- 실제 MP4 렌더 계획, 진행·취소와 임시 파일 검증·게시 경계는
-  [DESIGN-0009](docs/design/design-0009-mp4-export-contract.md)을 확인합니다.
-- 내레이션·텍스트·화면 효과·전환의 저장값과 공통 합성 의미는
-  [DESIGN-0011](docs/design/design-0011-creative-features-contract.md)을 확인합니다.
-- 자동 저장·비정상 종료 복구, 누락 원본 다시 연결, 작업 큐·캐시와 프록시 경계는
-  [DESIGN-0012](docs/design/design-0012-recovery-background-contract.md)을 확인합니다.
-- 기술 결정이나 라이선스처럼 특정 주제가 필요하면 문서 안내의 목적별 탐색표에서 관련
-  ADR 또는 정책 문서를 찾습니다.
+배포 ZIP을 받은 경우 압축을 푼 뒤 `SIGNING-STATUS.txt`를 확인하고
+`MovieMakerSetup.exe`를 실행합니다. 설치 과정에서 시작 메뉴·바탕 화면 바로가기와
+`.mmrproj` 파일 연결을 선택할 수 있습니다.
 
-일반 문서 파일명은 `<카테고리>-<4자리 순번>-<주제>.md` 형식을 사용합니다. 숫자는 같은
-카테고리 안에서 문서를 안정적으로 식별하기 위한 값이며, 전체 읽기 순서는
-`docs/README.md`가 정의합니다.
+배포 패키지는 FFmpeg와 ffprobe를 포함하지 않습니다. 같은 배포본의 두 실행 파일을 준비하고
+첫 실행 화면에서 두 파일이 있는 `bin` 폴더를 선택합니다.
 
-## 왜 만드는가
+첫 실행에는 Python과 잠긴 패키지를 내려받기 위한 인터넷 연결이 필요합니다. 별도의 Python,
+uv, Qt SDK 또는 빌드 도구는 설치하지 않아도 됩니다.
 
-Windows Movie Maker는 개인 영상과 사진을 간단히 편집하고 공유할 수 있게 해 주던 프로그램이었습니다. 그러나 Movie Maker가 포함된 Windows Essentials 2012는 2017년 1월 10일 지원이 종료되었고, Microsoft의 공식 다운로드도 중단되었습니다. 이 프로젝트는 원본 설치 파일을 재배포하는 대신 그 핵심 사용 경험을 새로 구현합니다.
+### 소스에서 설치
 
-복각의 기준은 다음 두 세대에서 가져옵니다.
+다음 항목을 먼저 준비합니다.
 
-- Windows XP/Vista판의 익숙한 **미디어 모음 + 미리 보기 + 스토리보드/타임라인** 구성
-- Movie Maker 2012의 **오디오 파형, 별도 내레이션 트랙, 오디오 강조(더킹), H.264 출력** 같은 실용적인 개선점
-- 현재 환경에서 기대되는 안정적인 자동 저장, 프로젝트 복구, 다양한 미디어 입력
+- 64비트 Windows 또는 Linux
+- [uv 0.12.1 이상](https://docs.astral.sh/uv/getting-started/installation/)
+- 같은 배포본의 FFmpeg와 ffprobe(`libx264` 및 `aac` 인코더 포함)
 
-Microsoft 커뮤니티의 버전별 설명에 따르면 기존 버전은 클립을 준비하는 모음 영역과 스토리보드/타임라인을 제공했고, 후기 버전은 이를 하나의 단순한 프로젝트 영역으로 통합했습니다. 이 프로젝트는 두 방식의 장점을 취하되 특정 버전의 화면을 픽셀 단위로 복사하지는 않습니다.
-
-## 프로젝트 목표
-
-1. **진입 장벽을 낮춘다.** 파일을 끌어다 놓은 뒤 자르기, 나누기, 순서 변경만 알아도 결과물을 만들 수 있어야 합니다.
-2. **원본을 안전하게 보존한다.** 모든 편집은 비파괴 방식으로 기록하며, 가져온 원본 파일을 수정하지 않습니다.
-3. **처음부터 끝까지 완결된 흐름을 제공한다.** 가져오기 → 편집 → 미리 보기 → 프로젝트 저장 → 동영상 내보내기가 끊김 없이 동작해야 합니다.
-4. **Movie Maker다운 제약을 유지한다.** 전문 NLE의 수십 개 트랙과 복잡한 합성보다 가정용 영상, 학교 과제, 짧은 기록물에 필요한 기능을 명확하게 제공합니다.
-5. **현대적인 파일 형식으로 결과를 남긴다.** 최소한 MP4(H.264 영상/AAC 오디오) 출력을 지원하고, 코덱 차이는 사용자에게 가능한 한 드러내지 않습니다.
-
-## 완성되면 할 수 있는 일
-
-- 영상, 사진, 음악, 음성 파일을 파일 선택 또는 드래그 앤 드롭으로 가져오기
-- 여러 영상과 사진을 원하는 순서로 이어 붙이고 클립을 복제·이동·삭제하기
-- 영상·오디오 클립의 시작과 끝을 다듬거나 재생 헤드 위치에서 나누고, 중간의 불필요한 구간 제거하기
-- 영상 속도를 느리게/빠르게 조절하고 사진이 표시되는 시간을 늘이거나 줄이기
-- 원본 영상 소리, 배경 음악, 내레이션의 음량과 페이드 인/아웃 조절하기
-- 오디오 파형을 보며 장면 전환이나 컷 위치 맞추기
-- 마이크로 내레이션을 녹음하거나 외부 음성 파일 추가하기
-- 장면 사이에 페이드 및 기본 전환 효과 넣기
-- 제목, 캡션, 엔딩 크레딧을 추가하고 글꼴·색상·위치·표시 시간 조절하기
-- 화면 비율과 출력 해상도를 선택하고 전체 영상을 미리 보기
-- 프로젝트를 저장했다가 다시 열고, 실행 중단 뒤 자동 저장본에서 복구하기
-- 완성 영상을 MP4 파일로 내보내기
-
-## 기능 범위와 우선순위
-
-| 영역 | MVP — 반드시 제공 | 1.0 — 복각판 완성 | 이후 확장 |
-| --- | --- | --- | --- |
-| 미디어 | 영상·오디오·이미지 가져오기, 메타데이터/썸네일, 보관함에서 제거 | 드래그 앤 드롭, 누락 파일 다시 연결, 대용량 프록시 | 카메라 직접 가져오기 |
-| 편집 | 배치, 순서 변경, 분할, 시작/끝 트리밍, 삭제 | 복제, 다중 선택, 리플 편집, 실행 취소/다시 실행 | 마커, 정밀 슬립 편집 |
-| 시간 | 사진 표시 시간, 영상 재생 속도 | 속도별 오디오 처리, 프레임 단위 이동 | 속도 램핑 |
-| 오디오 | 원본음·음악 트랙, 음량, 음소거 | 파형, 내레이션 트랙/녹음, 페이드, 자동 더킹 | 노이즈 감소, 간단한 EQ |
-| 화면 | 미리 보기 | 맞춤/채움, 회전, 밝기 및 기본 색상 보정, 흔들림 보정 검토 | 크로마키, 고급 합성 |
-| 꾸미기 | — | 페이드 전환, 제목/캡션/크레딧, 전환·시각 효과 프리셋, 텍스트 애니메이션 | 사용자 효과 플러그인 |
-| 프로젝트 | 새로 만들기, 저장, 다른 이름으로 저장, 열기, 누락 미디어 안내 | 자동 저장, 충돌 복구, 최근 프로젝트, 누락 파일 다시 연결 | 프로젝트 템플릿 |
-| 출력 | MP4(H.264/AAC), 원본 비율·해상도 유지, 720p/1080p 프리셋, 기본 진행률/취소/오류 안내 | 프레임률·품질 설정, 장시간 출력 오류 복구 | 추가 포맷, 공유 서비스 연동 |
-
-`MVP`는 기능 데모가 아니라 짧은 영상을 실제로 완성할 수 있는 첫 배포판을 뜻합니다. `1.0`은 원본 Movie Maker의 대표 경험을 일상적으로 사용할 만큼 안정화한 버전입니다.
-
-## 핵심 편집 모델
-
-편집 결과는 원본 파일 자체가 아니라 프로젝트 안의 명령으로 저장합니다.
-
-```text
-미디어 보관함 ──끌어놓기──▶ 스토리보드/타임라인 ──재생──▶ 미리 보기
-                                  │
-                     분할 · 트리밍 · 순서 · 속도
-                     음악 · 내레이션 · 자막 · 전환
-                                  │
-                                  ▼
-                         MP4 동영상 내보내기
-```
-
-- **비디오/사진 트랙:** 장면이 순서대로 이어지는 주 스토리 라인
-- **음악 트랙:** 프로젝트 전반의 배경 음악
-- **내레이션 트랙:** 음성 설명과 효과음
-- **텍스트 레이어:** 제목, 장면 캡션, 엔딩 크레딧
-- **전환:** 인접한 두 장면 사이에만 적용되는 효과
-
-초기 버전은 이 고정된 구조를 사용합니다. 무제한 비디오 레이어는 범위를 크게 복잡하게 만들기 때문에 1.0 목표에 포함하지 않습니다.
-
-## 대표 사용 시나리오
-
-### 여행 영상 만들기
-
-1. 휴대폰 영상과 사진을 가져옵니다.
-2. 장면을 촬영 순서대로 놓고 흔들린 앞뒤 구간을 자릅니다.
-3. 사진 표시 시간을 조절하고 장면 사이에 페이드를 넣습니다.
-4. 배경 음악과 장소 캡션을 추가합니다.
-5. 1080p MP4로 내보냅니다.
-
-### 강의·설명 영상 만들기
-
-1. 화면 녹화 영상을 가져와 실수한 부분을 분할해 삭제합니다.
-2. 재생 속도를 조절하고 마이크로 내레이션을 녹음합니다.
-3. 말하는 동안 배경 음악이 자동으로 작아지게 설정합니다.
-4. 제목과 핵심 설명 캡션을 추가해 MP4로 저장합니다.
-
-## 제품 원칙
-
-- 버튼 이름과 동작은 처음 사용하는 사람도 예측할 수 있어야 합니다.
-- 편집 조작 뒤 미리 보기는 즉시 갱신되어야 합니다.
-- 저장된 프로젝트는 미디어 경로, 편집점, 효과 설정만 보관하고 원본 미디어를 복제하지 않습니다.
-- 미디어 파일이 이동되었을 때 프로젝트를 망가뜨리지 않고 다시 찾을 방법을 제공합니다.
-- 내보내기 결과는 미리 보기와 시각적·청각적으로 일치해야 합니다.
-- 긴 작업은 진행률과 취소 방법을 보여 주며 실패 이유를 사용자가 이해할 수 있게 설명합니다.
-- 키보드 탐색, 고대비, 자막 가독성 등 Windows 접근성 관례를 따릅니다.
-
-## 기술 및 실행 방식
-
-애플리케이션 로직과 UI는 **Python + PySide6(Qt Widgets)**로 구현하고, 미디어 분석과 렌더링은 **FFmpeg/ffprobe**에 위임합니다. 저장소는 Python 런타임이나 완성된 가상환경을 포함하지 않습니다. Windows 설치 패키지는 검증된 [`uv`](https://docs.astral.sh/uv/) 실행 파일을 포함해 프로젝트 전용 `.venv`를 구성하고, 소스에서 실행하는 개발자는 설치된 uv를 사용할 수 있습니다.
-
-재현 가능한 실행 환경은 다음 세 파일로 관리합니다.
-
-- `.python-version`: 프로젝트가 요구하는 정확한 CPython 버전
-- `pyproject.toml`: 애플리케이션 메타데이터와 직접 의존성
-- `uv.lock`: 전이 의존성을 포함한 정확한 패키지 조합
-
-초기 실행 기준은 uv가 관리하는 **CPython 3.13.14**와 **uv 0.12.1 이상**입니다. `--managed-python`을 사용하므로 컴퓨터에 기존 Python이나 Microsoft Store Python이 설치되어 있어도 사용하지 않습니다. 개발·실행 환경을 변경할 때는 `uv.lock`도 함께 갱신하고 검증합니다.
-
-### 사전 요구 사항
-
-Windows 설치 패키지 사용자는 다음 항목만 준비하면 됩니다.
-
-- 64비트 Windows
-- 최초 Python 및 패키지 다운로드를 위한 인터넷 연결
-- 동일한 배포본에서 가져온 FFmpeg와 ffprobe
-
-별도 .NET 런타임, C/C++ 빌드 도구, uv, Python, Qt SDK 또는 PySide6를 설치할 필요가 없습니다.
-설치 패키지의 네이티브 EXE는 릴리스 컴퓨터에서 미리 빌드되며 Windows 시스템 구성 요소만
-사용합니다. 패키지의 고정 uv가 CPython 3.13.14와 잠긴 Python 패키지를 사용자 승인 후
-구성합니다.
-
-소스에서 직접 실행하는 개발 환경은 다음 항목이 필요합니다.
-
-- 64비트 Windows 또는 64비트 Linux(`x86_64`, `aarch64`)
-- [`uv` 0.12.1 이상](https://docs.astral.sh/uv/getting-started/installation/)
-- 동일한 배포본에서 가져온 FFmpeg와 ffprobe
-- Linux에서는 Qt GUI 실행에 필요한 X11/Wayland, OpenGL/EGL, XKB/XCB, 글꼴, DBus 및 오디오 런타임 라이브러리
-
-Python, Qt SDK, PySide6 또는 가상환경을 별도로 설치하거나 활성화할 필요는 없습니다. 설정 스크립트가 고정된 CPython을 uv 관리 영역에 설치하고 저장소의 `.venv`를 구성합니다. Linux 배포판이 제공하는 GUI·오디오 시스템 라이브러리는 uv의 관리 대상이 아니므로 별도로 준비해야 합니다.
-
-현재 PySide6 Linux 휠을 기준으로 `x86_64`는 glibc 2.34 이상, `aarch64`는 glibc 2.39 이상인 배포판을 권장합니다. 더 오래된 배포판은 잠금 파일의 바이너리 패키지를 설치하지 못할 수 있습니다.
-
-### FFmpeg 설치
-
-FFmpeg는 Python 패키지가 아니며 uv가 설치하지 않습니다. `libx264` H.264 인코더와 FFmpeg의
-기본 `aac` 인코더를 지원하는 빌드의 FFmpeg와 ffprobe를 함께 설치해야 합니다.
-
-Windows에서는 [FFmpeg의 Windows 다운로드 안내](https://ffmpeg.org/download.html#build-windows)에 연결된 64비트 빌드를 내려받아 압축을 풉니다. Linux에서는 배포판 패키지 관리자를 사용할 수 있습니다.
-
-```bash
-# Debian/Ubuntu
-sudo apt update
-sudo apt install ffmpeg
-
-# Arch Linux
-sudo pacman -S ffmpeg
-```
-
-Fedora 계열은 FFmpeg 패키지를 제공하는 저장소를 먼저 활성화해야 할 수 있습니다. 어느 운영체제에서든 두 실행 파일은 같은 배포본과 `bin` 디렉터리에서 가져와야 합니다.
-
-설정·실행 스크립트는 다음 순서로 FFmpeg를 찾습니다.
-
-1. Windows의 `-FFmpegDirectory` 또는 Linux의 `--ffmpeg-dir`로 전달한 디렉터리
-2. `MOVIE_MAKER_FFMPEG_DIR` 환경 변수
-3. 저장소의 `tools/ffmpeg/bin` 디렉터리
-4. 현재 `PATH`
-
-예를 들어 FFmpeg 경로를 점검 스크립트에 직접 전달할 수 있습니다.
-
-```powershell
-.\scripts\environment\check-prerequisites.ps1 `
-  -FFmpegDirectory "C:\Tools\ffmpeg\bin"
-```
-
-```bash
-bash ./scripts/environment/check-prerequisites.sh \
-  --ffmpeg-dir /opt/ffmpeg/bin
-```
-
-`tools\`는 Git에서 제외되므로 개인 개발 환경에서만 FFmpeg를 저장소 아래에 둘 수도 있습니다. 프로젝트는 FFmpeg를 자동 다운로드하거나 시스템 `PATH`를 수정하지 않습니다.
-
-점검 스크립트는 FFmpeg 실행 여부뿐 아니라 `libx264`/`aac` 인코더와 트리밍, 합성, 크기 조절,
-오디오 믹싱 및 텍스트 출력에 필요한 필터도 확인합니다. 배포할 FFmpeg 빌드와 라이선스 정책은
-별도로 확정해야 합니다.
-
-### 라이선스와 영상 출력물
-
-현재 저장소에는 프로젝트 자체의 `LICENSE` 파일과 `pyproject.toml` 라이선스 선언이 아직 없습니다. 의존성의 라이선스와 애플리케이션 배포 정책을 검토한 뒤 정식 배포 전에 확정합니다.
-
-PySide6/Qt, FFmpeg 및 Python 패키지의 소프트웨어 라이선스는 일반적으로 해당 소프트웨어의 사용·수정·연결·재배포에 적용됩니다. 사용자가 자신의 미디어를 편집해 만든 MP4 등의 출력물에 LGPL, GPL 또는 다른 소프트웨어 라이선스가 자동으로 적용되지는 않습니다. 이 프로젝트는 사용자가 제공한 미디어로 만든 프로젝트 파일과 출력 미디어에 소프트웨어 라이선스를 추가로 부과하거나 그 권리를 주장하지 않습니다.
-
-다만 이 원칙은 출력물에 포함된 제3자 콘텐츠의 권리를 대신 해결하지 않습니다. 원본 영상·사진·음악·효과음·글꼴·LUT·스티커·템플릿의 라이선스와 초상권·상표권 등은 각각 준수해야 합니다. 향후 프로그램이 기본 제공하는 자산도 결과물의 상업적 이용과 배포를 허용하는 조건인지 확인하고, 출처와 라이선스를 별도로 기록합니다.
-
-H.264/AAC 같은 코덱의 특허는 오픈소스 라이선스와 별개의 문제입니다. 코덱을 사용했다는 이유만으로 출력 파일이 GPL이나 LGPL이 되지는 않지만, 프로그램 또는 인코더의 상업적 배포와 특정 영상 서비스에는 지역과 이용 형태에 따른 특허 조건이 적용될 수 있습니다. 정식 배포 전에 대상 시장, FFmpeg 빌드 구성 및 출력 코덱을 기준으로 다시 검토합니다.
-
-세부 원칙과 예외, 향후 기본 제공 자산의 승인 기준은
-[POLICY-0001: 라이선스와 출력물 권리](docs/policies/policy-0001-licensing-and-output-rights.md)에
-정리합니다. 이 안내는 법률 자문을 대신하지 않습니다.
-
-### 실행 환경 구성
-
-#### Windows
-
-저장소 루트의 PowerShell에서 다음을 실행합니다. 실행 정책이 로컬 스크립트를 차단하는 컴퓨터에서도 현재 프로세스에 한해 실행할 수 있는 명령입니다.
+Windows에서는 [FFmpeg Windows 다운로드 안내](https://ffmpeg.org/download.html#build-windows)에
+연결된 64비트 빌드를 내려받아 압축을 푼 뒤, 저장소 루트의 PowerShell에서 실행합니다.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass `
@@ -258,57 +42,22 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -FFmpegDirectory "C:\Tools\ffmpeg\bin"
 ```
 
-테스트·린트 도구까지 필요한 개발 환경은 `-Dev`를 추가합니다.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass `
-  -File .\scripts\environment\setup.ps1 `
-  -Dev `
-  -FFmpegDirectory "C:\Tools\ffmpeg\bin"
-```
-
-#### Linux
-
-Debian/Ubuntu의 일반적인 Qt GUI 런타임 의존성은 다음과 같이 준비할 수 있습니다. 배포판 버전에 따라 패키지 이름이 다를 수 있으며, Wayland 또는 다른 데스크톱 환경은 대응 패키지가 추가로 필요할 수 있습니다.
-
-```bash
-sudo apt update
-sudo apt install \
-  ffmpeg libdbus-1-3 libegl1 libfontconfig1 libgl1 libglib2.0-0 libpulse0 \
-  libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
-  libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
-  libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0
-```
-
-FFmpeg가 `PATH`에 있다면 별도 인자 없이 설정할 수 있습니다.
+Linux에서는 FFmpeg와 Qt GUI 런타임 라이브러리를 설치한 뒤 실행합니다. FFmpeg가 `PATH`에
+있으면 별도 경로 인자가 필요하지 않습니다.
 
 ```bash
 bash ./scripts/environment/setup.sh
 ```
 
-사용자 지정 FFmpeg와 개발 의존성을 함께 사용하려면 다음과 같이 실행합니다.
+배포판별 Linux 패키지, 사용자 지정 FFmpeg 경로, 개발 의존성 설치 방법은
+[개발·실행 환경 안내](docs/guides/guide-0001-development-environment.md)를 참고합니다.
 
-```bash
-bash ./scripts/environment/setup.sh \
-  --dev \
-  --ffmpeg-dir /opt/ffmpeg/bin
-```
+## 실행
 
-#### 공통 동작
+Windows 설치 패키지를 사용했다면 시작 메뉴 또는 바탕 화면의 Movie Maker 바로가기를
+실행합니다.
 
-스크립트는 다음 작업을 순서대로 수행합니다.
-
-1. 운영체제와 CPU 아키텍처, uv, FFmpeg 및 ffprobe를 검사합니다.
-2. uv 관리형 CPython 3.13.14를 설치하거나 검증합니다.
-3. `uv.lock` 그대로 프로젝트 전용 `.venv`를 구성합니다.
-4. PySide6와 Qt Multimedia/SVG 플러그인을 실제로 불러옵니다.
-5. 설치된 런타임 버전을 출력합니다.
-
-의존성을 바꾼 개발자만 `uv lock`으로 잠금 파일을 갱신합니다. 일반 사용자와 CI는 항상 기존 `uv.lock`을 사용해야 합니다.
-
-### 애플리케이션 실행
-
-환경 구성이 끝난 뒤 다음 명령으로 실행합니다.
+소스에서 설치했다면 저장소 루트에서 운영체제에 맞는 명령을 실행합니다.
 
 ```powershell
 .\scripts\environment\run.ps1 -FFmpegDirectory "C:\Tools\ffmpeg\bin"
@@ -318,228 +67,8 @@ bash ./scripts/environment/setup.sh \
 bash ./scripts/environment/run.sh
 ```
 
-현재 미디어 가져오기와 보관함 제거는 실제 로컬 파일을 대상으로 동작합니다. 가져오기는
-ffprobe로 메타데이터를 읽고 ffmpeg 썸네일을 메모리에 만들지만 원본을 복사하거나 수정하지
-않습니다. 프로젝트 새로 만들기·저장·다른 이름으로 저장·열기와 MVP 타임라인 편집도 실제
-프로젝트 값과 명령 이력으로 동작합니다. 미리 보기 영상·오디오와 MP4 출력은 실제 FFmpeg를
-사용합니다. W-09 내레이션, 텍스트·전환·시각 효과도 실제 녹음·프로젝트 명령과 공통 FFmpeg
-합성 경로로 동작합니다. W-10의 자동 저장·비정상 종료 복구·최근 프로젝트·검증된 다시 연결과
-실제 썸네일·파형·미리 보기 전용 프록시도 백그라운드 서비스로 동작합니다. 버전과
-DLL 로딩만 확인하고 창을 열지 않으려면 다음을 실행합니다.
+## 더 알아보기
 
-```powershell
-.\scripts\environment\run.ps1 `
-  -FFmpegDirectory "C:\Tools\ffmpeg\bin" `
-  -- --check
-```
-
-```bash
-bash ./scripts/environment/run.sh -- --check
-```
-
-스크립트를 거치지 않는 대응 명령은 다음과 같습니다. 먼저 FFmpeg가 `PATH` 또는 `MOVIE_MAKER_FFMPEG_DIR`에서 발견되어야 합니다.
-
-```powershell
-uv --managed-python python install 3.13.14
-uv --managed-python sync --locked --no-dev
-uv --managed-python run --locked --no-sync -- movie-maker
-```
-
-`--locked`는 실행 중 잠금 파일이 변경되는 것을 막고, `--no-sync`는 실행 시 암묵적으로 패키지를 설치하거나 제거하지 않게 합니다. `.venv`가 없거나 의존성이 맞지 않으면 운영체제에 맞는 `setup.ps1` 또는 `setup.sh`를 다시 사용합니다.
-
-### 개발 검사
-
-`setup.ps1 -Dev` 또는 `setup.sh --dev`를 실행한 환경에서 다음 검사를 사용할 수 있습니다.
-
-```powershell
-uv --managed-python run --locked --no-sync -- pytest
-uv --managed-python run --locked --no-sync -- ruff check .
-uv --managed-python run --locked --no-sync -- mypy
-git diff --check
-```
-
-GUI 테스트는 `pytest-qt`와 PySide6를 사용하도록 `pyproject.toml`에 고정되어 있습니다.
-
-### 문제 해결
-
-- `uv`가 CPython 3.13.14를 찾지 못하면 `uv self update` 또는 uv를 설치한 패키지 관리자의 업데이트 명령을 실행합니다.
-- `DLL load failed`가 발생하면 Windows Update를 적용하고 [Microsoft Visual C++ 재배포 가능 패키지 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)를 설치한 뒤 다시 시도합니다.
-- Qt 플랫폼 플러그인 오류가 발생하면 외부 프로그램이 설정한 `QT_PLUGIN_PATH`나 `PYTHONPATH`를 제거한 새 PowerShell에서 실행합니다.
-- Linux에서 `xcb` 또는 OpenGL 플러그인 오류가 발생하면 위의 GUI 런타임 패키지와 그래픽 드라이버가 설치됐는지 확인합니다. 디스플레이 서버가 없는 SSH·CI 세션에서는 일반 GUI 창을 열 수 없습니다.
-- `.venv`가 손상된 경우 생성물인 `.venv`를 이름 변경하거나 제거한 뒤 운영체제에 맞는 설정 스크립트를 다시 실행합니다. uv 관리형 Python과 패키지 캐시는 재사용됩니다.
-- FFmpeg 검사에서 실패하면 FFmpeg와 ffprobe 실행 파일이 같은 배포본인지, 필수 인코더와 필터가 포함된 완전한 빌드인지 확인합니다.
-
-### Windows 설치 패키지와 런처
-
-배포 ZIP을 푼 뒤 `SIGNING-STATUS.txt`를 확인하고 `MovieMakerSetup.exe`를 실행합니다. 시작 메뉴,
-바탕 화면 바로가기, `.mmrproj` 파일 연결과 런처 디렉터리의 사용자 PATH 등록을 각각 선택할 수
-있습니다. PATH 선택은 `MovieMakerLauncher.exe`가 있는 디렉터리만 등록하며 Python, `.venv`, uv와
-FFmpeg는 등록하지 않습니다.
-
-첫 실행에서 `MovieMakerLauncher.exe`는 패키지에 포함된 uv, 고정 Python, `.venv`와
-FFmpeg/ffprobe를 점검합니다. 환경 구성 또는 복구는 설명을 보여 준 뒤 사용자가 승인한 경우에만
-실행하며, 일반 앱 실행은 네트워크나 환경 변경을 일으키지 않습니다. 준비됨 상태에서 프로젝트를
-선택하거나 다음과 같이 앱 인자를 전달할 수 있습니다.
-
-```powershell
-MovieMakerLauncher.exe -- --online
-MovieMakerLauncher.exe -- --project "C:\Videos\여행 프로젝트.mmrproj"
-```
-
-첫 번째 `--` 뒤의 인자는 Python 애플리케이션에 원래 argv 단위로 전달합니다. `--online`은 앱
-동작 모드이며 의존성 설치나 제품 업데이트를 뜻하지 않습니다. 진단 보기는 복사 가능한 세부사항과
-로그 위치를 표시하며 기본 로그 위치는
-`%LOCALAPPDATA%\OpenAI\MovieMakerReproduction\Logs`입니다. 유지관리 화면에서 새 패키지로
-명시적 업데이트를 실행하거나 제거할 수 있고, 제거는 사용자 프로젝트와 원본 미디어를 보존합니다.
-
-릴리스 빌드는 MSVC 개발자 PowerShell 또는 검증된 portable Zig가 있는 개발 컴퓨터에서만
-실행합니다. 이 도구들은 사용자 패키지에 들어가지 않습니다.
-
-```powershell
-.\launcher\build.ps1 -ZigPath C:\Tools\zig\zig.exe
-.\scripts\packaging\build-windows.ps1 -ZigPath C:\Tools\zig\zig.exe
-```
-
-전체 결정과 런처 책임 범위는
-[ADR-0001: Python, uv 및 네이티브 런처](docs/decisions/adr-0001-python-uv-native-launcher.md)에
-기록합니다. 실제 상태·프로세스·설치 계약은
-[DESIGN-0013](docs/design/design-0013-windows-launcher-installer-contract.md), 네트워크와 로그
-경계는 [POLICY-0002](docs/policies/policy-0002-runtime-privacy-and-network.md)를 따릅니다.
-
-## 로드맵
-
-로드맵의 단계는 날짜가 아니라 검증 가능한 결과를 기준으로 합니다. 확정된 기술 선택은 별도 ADR에 남기며, 검증 결과가 결정을 바꿀 경우 새 ADR로 변경 이유를 기록합니다.
-
-### 0단계 — 제품 정의와 기술 검증
-
-- [x] Python, PySide6, uv 및 네이티브 런처를 기본 기술 구성으로 결정
-- [x] 정확한 CPython 패치 버전과 최소 지원 uv 버전 확정
-- [x] 런처에서 환경 점검과 애플리케이션 인자 전달 검증
-- [ ] 디코딩·인코딩 엔진과 라이선스 검토
-- [ ] 대표 입력 파일(H.264, HEVC, 가변 프레임률, MP3, WAV, JPEG, PNG) 호환성 실험
-- [ ] 10분 분량 프로젝트의 프레임 정확도와 미리 보기 성능 검증
-- [x] 프로젝트 파일 스키마와 비파괴 편집 모델 설계
-- [ ] 원본을 참고하되 독자적인 이름·아이콘·시각 자산을 사용하는 디자인 가이드 수립
-
-**완료 조건:** 가져온 영상의 임의 구간을 지정하여 MP4로 다시 출력하는 수직 프로토타입이 동작한다.
-
-### 1단계 — 편집 코어(MVP)
-
-- [x] 새 프로젝트 및 영상·오디오·이미지 가져오기
-- [x] 미디어 보관함과 항목 제거 및 기본 타임라인 UI
-- [x] 실제 영상·사진 미리 보기 플레이어
-- [x] 영상·오디오 클립 추가, 이동, 삭제, 분할, 트리밍
-- [x] 편집 동작의 명령 실행 경계와 세션 행동 이력 구조
-- [x] 사진 길이 및 영상 재생 속도 변경
-- [x] 재생/일시 정지, 위치 탐색 및 실제 프레임 이동
-- [x] 원본 오디오 음량 및 배경 음악 배치와 실제 미리 듣기
-- [x] 프로젝트 저장/다른 이름으로 저장/열기와 누락 미디어 안내
-- [x] 원본 비율·해상도 유지 또는 720p/1080p MP4 내보내기와 기본 진행률·취소·오류 안내
-
-**완료 조건:** 최소 두 영상과 한 음악 파일로 1분짜리 영상을 만들고, 앱을 재실행해 편집을 계속한 뒤 정상적인 MP4로 출력할 수 있다.
-
-### 2단계 — Movie Maker다운 창작 기능(0.5)
-
-- [x] 스토리보드와 확대 가능한 타임라인 보기, 프레임 단위 이동
-- [x] 실행 취소/다시 실행과 안정적인 리플 편집
-- [x] 같은 트랙 다중 선택, 클립 복제와 원자적 그룹 이동·삭제
-- [x] 오디오 파형(W-10)
-- [x] 페이드 인/아웃과 원본음·음악·내레이션 음량 믹서
-- [x] 내레이션 파일 및 마이크 녹음
-- [x] 제목, 캡션, 크레딧 편집기
-- [x] 페이드와 대표 전환 효과
-- [x] 회전, 맞춤/채움, 밝기와 기본 시각 효과
-- [x] 자동 저장 및 비정상 종료 복구
-
-**완료 조건:** 여행 영상과 내레이션 강의 영상 시나리오를 외부 도구 없이 완성할 수 있고, 실행 취소와 복구가 데이터 손실 없이 동작한다.
-
-### 3단계 — 성능·호환성·품질(0.8)
-
-- [x] 프록시 미디어와 백그라운드 파형/썸네일 생성
-- [ ] 가변 프레임률과 서로 다른 해상도·프레임률 혼합 처리
-- [ ] 영상·음성 싱크 및 프레임 경계 테스트
-- [x] 내레이션 우선 자동 더킹
-- [ ] 출력 품질·해상도·프레임률 프리셋
-- [ ] 장시간 내보내기 진행률 정확도, 취소 후 정리 및 오류 복구
-- [ ] 키보드 단축키, 접근성, 다국어화 기반
-- [x] Windows 설치·업데이트·제거 흐름
-
-**완료 조건:** 60분 프로젝트를 편집·저장·재개·출력하는 안정성 시험을 통과하고, 지원 형식 표와 알려진 제한 사항이 문서화된다.
-
-### 4단계 — 1.0 배포
-
-- [x] 대표 전환·효과·텍스트 애니메이션 세트 완성
-- [ ] 성능 및 메모리 사용량 기준 충족
-- [ ] 충돌 복구와 프로젝트 이전 버전 호환성 검증
-- [ ] 신규 사용자용 온보딩과 예제 프로젝트
-- [ ] 라이선스, 개인정보 처리, 서드파티 고지 정리
-- [ ] 서명된 Windows 설치 패키지와 릴리스 노트 제공
-
-**완료 조건:** 처음 사용하는 사람이 안내 없이 30분 안에 가져오기부터 1080p MP4 출력까지 완료하고, 자동화된 핵심 편집/내보내기 회귀 테스트를 모두 통과한다.
-
-### 1.0 이후 후보
-
-- 영상 안정화와 간단한 색상 보정
-- 테마 기반 자동 영화 만들기
-- 사용자 정의 효과/전환 확장 시스템
-- 추가 출력 코덱 및 하드웨어 인코딩 최적화
-- 선택적 온라인 공유 연동
-
-## 1.0에서 하지 않을 것
-
-범위를 지키기 위해 다음은 초기 목표에서 제외합니다.
-
-- 다중 카메라 편집, 무제한 영상 트랙, 노드 기반 합성
-- 전문 색보정, 모션 그래픽, DAW 수준의 오디오 처리
-- 클라우드 계정이나 인터넷 연결을 요구하는 핵심 기능
-- 원본 Windows Movie Maker 바이너리, 코드, 아이콘, 음원, 상표 자산의 포함 또는 재배포
-- Microsoft의 기존 프로젝트 파일(`.mswmm`, `.wlmp`) 호환성 보장
-
-기존 프로젝트 가져오기는 형식과 권리 문제를 별도로 검토한 뒤 향후 호환 기능으로 판단합니다.
-
-## 품질 목표
-
-- 저장·자동 저장 중 원본 미디어나 정상 프로젝트가 손상되지 않을 것
-- 같은 프로젝트를 반복 출력했을 때 컷 위치와 전체 길이가 일관될 것
-- 미리 보기와 출력 파일 사이에 눈에 띄는 자막 위치·전환·음량 차이가 없을 것
-- 지원한다고 명시한 입력 파일은 성공적으로 가져오거나, 실패 이유와 해결 방법을 표시할 것
-- 앱 충돌 뒤 마지막 자동 저장 시점으로 복구할 수 있을 것
-
-## 개발 상태
-
-| 항목 | 상태 |
-| --- | --- |
-| 제품 목표 및 초기 범위 | 문서화됨 |
-| 기술 스택 | Python + PySide6 + uv + FFmpeg로 결정 |
-| 실행 환경 | uv 관리형 Python, 잠금 파일, 설정·점검·실행 스크립트 구현 |
-| 실행/배포 방식 | uv 환경 구현, 선택적 네이티브 런처는 설계 완료 |
-| UI 프로토타입 | MVP·1.0 인터랙티브 목업과 검증 기준선 승인 |
-| 프로젝트 코어 | W-01 시간·클립 모델과 원자적 명령 이력 구현 |
-| 미디어 보관함 | W-02 파일 선택, ffprobe 분석, 썸네일, 부분 성공·중복·안전한 제거 구현 |
-| 프로젝트 파일 | W-03 버전 JSON, 원자적 저장·열기, 누락 표시와 저장 확인 구현 |
-| 타임라인 편집 | W-08 고정 트랙 편집, 복제·호환 다중 선택·원자적 그룹 이동/삭제, 스토리보드·확대와 명령 기반 undo/redo 구현 |
-| 미리 보기 | W-05 실제 시간축, 영상·사진 FFmpeg 디코딩, 탐색·프레임 이동과 최신 요청 취소 구현 |
-| 오디오 믹싱 | W-06 원본음·음악 음량·음소거·배치·트리밍, 48kHz 스테레오 공통 그래프와 취소 가능한 미리 듣기 구현 |
-| 렌더링 | W-07 원본/720p/1080p H.264/AAC MP4, 진행·취소·검증과 원자적 게시 구현 |
-| 창작 기능 | W-09 실제 내레이션 WAV, 페이드·더킹·3버스 믹서, 텍스트·시각 효과·인접 전환과 공통 미리 보기/출력 합성 구현 |
-| 복구와 백그라운드 작업 | W-10 자동 저장·비정상 종료 복구, 최근 프로젝트, 검증된 다시 연결, 실제 파형·썸네일·미리 보기 전용 프록시 구현 |
-| Windows 실행·배포 | W-11 네이티브 런처, 검증된 내부 uv, 환경 진단·복구와 설치·업데이트·제거 구현 |
-| 첫 사용 가능 버전 | 미배포 |
-
-완료되지 않은 편집 기능은 README에서 지원한다고 표시하지 않습니다.
-
-## 이름과 권리
-
-이 저장소는 학습 및 보존적 재구현을 위한 **비공식 독립 프로젝트**이며 Microsoft와 제휴하거나 Microsoft의 승인을 받은 제품이 아닙니다. Windows와 Windows Movie Maker는 각 권리자의 상표일 수 있습니다. 정식 배포 전에는 혼동을 피할 수 있는 독자적인 제품명을 정하고, 원본 프로그램의 코드와 자산을 복사하지 않습니다.
-
-## 조사 근거
-
-- [Microsoft 지원 — Windows Essentials 앱 지원 종료](https://support.microsoft.com/en-us/windows/support-for-windows-essentials-apps-364adece-b947-43cb-68ce-8f4a6b2c22fd): Windows Essentials 2012와 Movie Maker의 지원·다운로드 종료
-- [Windows Experience Blog — 2012년 Movie Maker 소개](https://blogs.windows.com/windowsexperience/2012/08/07/introducing-the-new-windows-photo-gallery-and-movie-maker/): 오디오 파형, 내레이션 트랙, 오디오 강조, 텍스트 외곽선, 영상 안정화, H.264 출력
-- [Microsoft Learn — Movie Maker 및 DVD Maker SDK](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/bb331610%28v%3Dvs.85%29): Movie Maker 2의 사용자 정의 효과와 전환 구조
-- [Microsoft Learn Q&A — 버전별 프로젝트/스토리보드 구성](https://learn.microsoft.com/en-us/answers/questions/2653602/where-is-the-story-board-in-movie-maker): Vista판과 후기 Movie Maker의 작업 영역 차이
-- [University of Washington — Windows Movie Maker 안내서 (PDF)](https://www.com.uw.edu/tech/irc/assets/Windows_Movie_Maker.pdf): 타임라인 트리밍, 분할, 전환, 효과, 제목, 내레이션 작업 흐름
-
----
-
-좋은 첫 번째 구현 목표는 **“영상 두 개를 불러와 자르고 이어 붙인 뒤 MP4로 내보내기”**입니다. 이 한 줄이 안정적으로 완성되면 나머지 Movie Maker 경험을 그 위에 단계적으로 쌓을 수 있습니다.
+- [제품 개요·범위·로드맵·개발 상태](docs/product/product-0003-project-overview.md)
+- [개발·실행 환경, 문제 해결과 패키징](docs/guides/guide-0001-development-environment.md)
+- [전체 프로젝트 문서 안내](docs/README.md)

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository has an executable Python/Qt environment scaffold; video editing features remain in the design phase. `README.md` defines the product scope, roadmap, setup, and quality goals. `docs/README.md` defines the documentation map and reading order, while `docs/decisions/` contains numbered Architecture Decision Records (ADRs), such as `adr-0001-python-uv-native-launcher.md`.
+This repository contains an executable Python/Qt video editor. `README.md` is the user entry point for the project summary, installation, and launch instructions. `docs/product/product-0003-project-overview.md` defines the product scope, roadmap, quality goals, and current status; `docs/guides/guide-0001-development-environment.md` contains detailed development and runtime guidance. `docs/README.md` defines the documentation map and reading order, while `docs/decisions/` contains numbered Architecture Decision Records (ADRs), such as `adr-0001-python-uv-native-launcher.md`.
 
 Python application code lives in `src/movie_maker/`, Windows and Linux environment helpers in `scripts/environment/`, and automated tests in `tests/`. Keep future script families in purpose-specific subdirectories instead of mixing them in `scripts/`. Add feature packages such as `ui/`, `timeline/`, `media/`, and `project/` as implementation progresses; reserve `launcher/` for the native Windows launcher. Keep new documentation close to its subject and add architectural decisions as sequentially numbered ADRs.
 
@@ -26,7 +26,7 @@ server database such as PostgreSQL requires a separate multi-user or centralized
 - `uv --managed-python run --locked --no-sync -- mypy` — checks source types.
 - `git diff --check` — checks documentation and patches for whitespace errors.
 
-When adding development or test commands, define them in `pyproject.toml` and document the exact invocation here and in `README.md`.
+When adding development or test commands, define them in `pyproject.toml` and document the exact invocation here and in `docs/guides/guide-0001-development-environment.md`.
 
 ## Coding Style & Naming Conventions
 
