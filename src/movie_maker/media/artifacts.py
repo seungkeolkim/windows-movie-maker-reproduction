@@ -18,7 +18,7 @@ from movie_maker.media.process import (
     run_cancellable_process,
 )
 from movie_maker.media.thumbnail import PNG_SIGNATURE
-from movie_maker.project import MediaKind, MediaReference, MediaStreamKind
+from movie_maker.project import MediaKind, MediaReference, MediaStreamKind, ProjectTime
 
 
 class ArtifactGenerationError(RuntimeError):
@@ -99,11 +99,25 @@ class MediaArtifactGenerator:
         self.launcher = launcher
         self.timeout_seconds = timeout_seconds
 
-    def thumbnail_key(self, media: MediaReference) -> CacheKey:
+    def thumbnail_key(
+        self, media: MediaReference, *, source_time: ProjectTime | None = None
+    ) -> CacheKey:
+        settings: dict[str, str | int | float | bool] = {
+            "width": 320, "height": 180, "format": "png",
+        }
+        if source_time is not None:
+            if source_time.nanoseconds < 0 or (
+                media.duration is not None and source_time >= media.duration
+            ):
+                raise ValueError("Thumbnail time must be inside the source duration.")
+            settings.update(
+                width=160, height=90, source_ns=source_time.nanoseconds,
+                stream_index=media.primary_stream_index or 0,
+            )
         return CacheKey.create(
             CacheKind.THUMBNAIL,
             media.source_path,
-            {"width": 320, "height": 180, "format": "png"},
+            settings,
         )
 
     def waveform_key(self, media: MediaReference, *, bucket_count: int = 1200) -> CacheKey:
@@ -120,8 +134,10 @@ class MediaArtifactGenerator:
     ) -> CacheKey:
         return CacheKey.create(CacheKind.PROXY, media.source_path, settings.key_values())
 
-    def create_thumbnail(self, media: MediaReference, cancel: Event) -> Path:
-        key = self.thumbnail_key(media)
+    def create_thumbnail(
+        self, media: MediaReference, cancel: Event, *, source_time: ProjectTime | None = None
+    ) -> Path:
+        key = self.thumbnail_key(media, source_time=source_time)
         cached = self.cache.get(key)
         if cached is not None:
             return cached
@@ -131,7 +147,10 @@ class MediaArtifactGenerator:
             raise ArtifactGenerationError("분석되지 않은 미디어의 썸네일을 만들 수 없습니다.")
         arguments = [self.ffmpeg, "-v", "error", "-nostdin"]
         if media.kind is MediaKind.VIDEO and media.duration is not None:
-            seek_nanoseconds = min(1_000_000_000, max(0, media.duration.nanoseconds // 10))
+            seek_nanoseconds = (
+                source_time.nanoseconds if source_time is not None
+                else min(1_000_000_000, max(0, media.duration.nanoseconds // 10))
+            )
             seconds, remainder = divmod(seek_nanoseconds, 1_000_000_000)
             arguments.extend(("-ss", f"{seconds}.{remainder:09d}"))
         arguments.extend(
@@ -143,7 +162,10 @@ class MediaArtifactGenerator:
                 "-frames:v",
                 "1",
                 "-vf",
-                "scale=320:180:force_original_aspect_ratio=decrease",
+                (
+                    "scale=320:180:force_original_aspect_ratio=decrease"
+                    if source_time is None else "scale=160:90:force_original_aspect_ratio=decrease"
+                ),
                 "-f",
                 "image2pipe",
                 "-vcodec",

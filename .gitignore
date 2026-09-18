@@ -15,3 +15,6 @@ dist/
 tools/
 logs/
 autosave/
+
+# Reusable local test media (documented in samples/README.md)
+samples/media/

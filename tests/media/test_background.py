@@ -109,3 +109,27 @@ def test_one_failed_job_does_not_stop_following_job(tmp_path: Path) -> None:
     assert failed.wait(2).state is JobState.FAILED
     assert ready.wait(2).state is JobState.READY
     queue.shutdown()
+
+
+def test_cancelled_thumbnail_can_be_requested_again_before_worker_finishes(tmp_path: Path) -> None:
+    queue = PriorityMediaQueue(MediaCache(tmp_path / "cache"), workers=1)
+    started, release = Event(), Event()
+    key = _key(tmp_path, 1)
+
+    def slow(_cancel: Event) -> Path:
+        started.set()
+        release.wait(2)
+        return tmp_path / "old"
+
+    try:
+        old = queue.submit(key, JobPriority.VISIBLE_THUMBNAIL, slow)
+        assert started.wait(1)
+        old.cancel()
+        new = queue.submit(key, JobPriority.VISIBLE_THUMBNAIL, lambda _cancel: tmp_path / "new")
+        assert new is not old
+        release.set()
+        assert old.wait(2).state is JobState.CANCELLED
+        assert new.wait(2).state is JobState.READY
+    finally:
+        release.set()
+        queue.shutdown()

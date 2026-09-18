@@ -387,6 +387,11 @@ class MockController(QObject):
         self._sync_from_core(self._media_library.project)
 
     @property
+    def media_runtime(self) -> W10Runtime | None:
+        """Share the bounded media queue and artifact cache with timeline views."""
+        return self._runtime
+
+    @property
     def history_position(self) -> int:
         return self._history_position
 

@@ -115,7 +115,10 @@ class PriorityMediaQueue:
             if self._closed:
                 raise RuntimeError("The background media queue is closed.")
             existing = self._handles.get(key.digest)
-            if existing is not None and existing.state in {JobState.QUEUED, JobState.RUNNING}:
+            if (
+                existing is not None and not existing.cancel_event.is_set()
+                and existing.state in {JobState.QUEUED, JobState.RUNNING}
+            ):
                 return existing
             cached = self.cache.get(key)
             if cached is not None:

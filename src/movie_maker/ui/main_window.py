@@ -121,6 +121,14 @@ from movie_maker.ui.dialogs import (
     RuntimeDialog,
 )
 from movie_maker.ui.exporting import ExportBridge
+from movie_maker.ui.filmstrip import (
+    FILMSTRIP_HEIGHT,
+    FILMSTRIP_ROLE,
+    FilmstripClip,
+    FilmstripDelegate,
+    FilmstripFrames,
+    FilmstripTitleHover,
+)
 from movie_maker.ui.mock_controller import MockController, format_time
 from movie_maker.ui.mock_model import (
     AssetStatus,
@@ -463,6 +471,8 @@ class MainWindow(QMainWindow):
         self._dialogs: list[QWidget] = []
         self._actions: dict[str, QAction] = {}
         self._timeline_lists: dict[TrackKind, _TimelineListWidget] = {}
+        self._filmstrip_frames = FilmstripFrames(self, self.controller.media_runtime)
+        self._filmstrip_sources: tuple[object, ...] = ()
         self._preview_bridge = PreviewBridge(preview_coordinator, self)
         self._preview_png: bytes | None = None
         self._preview_frame_key: tuple[object, ...] | None = None
@@ -774,6 +784,10 @@ class MainWindow(QMainWindow):
             track_list.setSpacing(0)
             track_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
             track_list.setFixedHeight(44)
+            if track is TrackKind.VISUAL:
+                track_list.setFixedHeight(FILMSTRIP_HEIGHT + 6)
+                track_list.setItemDelegate(FilmstripDelegate(track_list, self._filmstrip_frames))
+                FilmstripTitleHover(track_list)
             track_list.itemSelectionChanged.connect(
                 lambda selected_track=track: self._select_timeline_items(selected_track)
             )
@@ -811,6 +825,10 @@ class MainWindow(QMainWindow):
         storyboard_layout = QVBoxLayout(storyboard_page)
         storyboard_layout.setContentsMargins(0, 0, 0, 0)
         self.storyboard_list = _TimelineListWidget()
+        self.storyboard_list.setItemDelegate(
+            FilmstripDelegate(self.storyboard_list, self._filmstrip_frames)
+        )
+        FilmstripTitleHover(self.storyboard_list)
         self._enable_library_drop(self.storyboard_list)
         self.storyboard_list.setObjectName("E-TIMELINE-STORYBOARD")
         self.storyboard_list.setAccessibleName("시각 클립 스토리보드")
@@ -1801,6 +1819,13 @@ class MainWindow(QMainWindow):
 
     def _refresh_timeline(self) -> None:
         state = self.controller.state
+        project = self.controller.media_project
+        sources = (project.project_id, project.media)
+        if sources != self._filmstrip_sources:
+            self._filmstrip_frames.reset()
+            self._filmstrip_sources = sources
+        core_clips = {clip.clip_id: clip for track in project.tracks for clip in track.clips}
+        media = {item.asset_id: item for item in project.media}
         total = state.total_duration_ms
         viewport_width = max(
             (widget.viewport().width() for widget in self._timeline_lists.values()),
@@ -1817,7 +1842,9 @@ class MainWindow(QMainWindow):
                     if track is TrackKind.VISUAL else "＋ 여기에 미디어 추가"
                 )
                 placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
-                placeholder.setSizeHint(QSize(timeline_width, 42))
+                placeholder.setSizeHint(QSize(
+                    timeline_width, FILMSTRIP_HEIGHT if track is TrackKind.VISUAL else 42
+                ))
                 widget.addItem(placeholder)
             cursor_ms = 0
             for clip in clips:
@@ -1844,6 +1871,11 @@ class MainWindow(QMainWindow):
                     label = f"⚠ {label}"
                 item = QListWidgetItem(icon, label)
                 item.setData(Qt.ItemDataRole.UserRole, clip.clip_id)
+                if track is TrackKind.VISUAL and clip.clip_id in core_clips and clip.asset_id in media:
+                    item.setData(FILMSTRIP_ROLE, FilmstripClip(
+                        core_clips[clip.clip_id], media[clip.asset_id],
+                        asset is not None and asset.status is AssetStatus.READY,
+                    ))
                 item.setToolTip(
                     f"{track.value} · 시작 {format_time(clip.start_ms)} · 길이 {details}"
                 )
@@ -1852,7 +1884,9 @@ class MainWindow(QMainWindow):
                     if total > 0
                     else timeline_width
                 )
-                item.setSizeHint(QSize(max(1, width), 36))
+                item.setSizeHint(QSize(
+                    max(1, width), FILMSTRIP_HEIGHT if track is TrackKind.VISUAL else 36
+                ))
                 widget.addItem(item)
                 cursor_ms = max(cursor_ms, clip.start_ms + clip.duration_ms)
                 if clip.clip_id in state.selected_clip_ids:
@@ -1869,6 +1903,11 @@ class MainWindow(QMainWindow):
                 f"{index}. {clip.label}\n{format_time(clip.duration_ms)}",
             )
             item.setData(Qt.ItemDataRole.UserRole, clip.clip_id)
+            if clip.clip_id in core_clips and clip.asset_id in media:
+                item.setData(FILMSTRIP_ROLE, FilmstripClip(
+                    core_clips[clip.clip_id], media[clip.asset_id],
+                    asset is not None and asset.status is AssetStatus.READY,
+                ))
             item.setToolTip(
                 f"스토리보드 순서 {index} · 시작 {format_time(clip.start_ms)}"
             )
@@ -3274,6 +3313,7 @@ class MainWindow(QMainWindow):
             self._preview_timer.stop()
             self._maintenance_timer.stop()
             self._preview_bridge.close()
+            self._filmstrip_frames.close()
             self._audio_bridge.close()
             self._audio_output.close()
             self._export_bridge.close()

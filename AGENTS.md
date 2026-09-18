@@ -38,6 +38,10 @@ Write Markdown with descriptive headings, short paragraphs, fenced code blocks w
 
 Tests use pytest and pytest-qt with the PySide6 API selected explicitly. New implementation work should add focused tests under `tests/`, mirroring the source package structure and using names such as `test_timeline_split.py`. No coverage threshold is set yet. Prioritize project-file safety, frame-accurate edits, FFmpeg argument construction, and launcher error handling.
 
+For recurring manual media/UI checks, use the local video documented in `samples/README.md` at
+`samples/media/file_example_MP4_1280_10MG.mp4`. Preserve this reusable copy; the media directory is
+Git-ignored. Automated tests must remain independent of this local-only file.
+
 ## Commit & Pull Request Guidelines
 
 History is brief, but the latest commit uses a Conventional Commit-style subject (`docs: define project roadmap and runtime architecture`). Prefer `type: concise imperative summary`, for example `feat: add media probe service` or `test: cover missing source recovery`.
