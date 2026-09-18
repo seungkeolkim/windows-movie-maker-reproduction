@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from fractions import Fraction
+from itertools import pairwise
 
 import pytest
 
@@ -148,6 +149,34 @@ def test_add_command_undo_restores_empty_timeline_and_canvas() -> None:
 
     assert edited.duration == ProjectTime.from_seconds(20)
     assert edited.canvas.reference_asset_id == "video"
+
+
+@pytest.mark.parametrize("index", [0, 1, 2])
+def test_insert_visual_clip_reflows_and_round_trips(index: int) -> None:
+    executor = CommandExecutor(_project(_video(), _photo(), _audio()))
+    executor.execute(AddMediaClip("video", "first"))
+    executor.execute(AddMediaClip("video", "second"))
+    executor.execute(AddMediaClip("audio", "music"))
+    music = executor.project.track(TrackKind.MUSIC)
+    result = _execute_round_trip(executor, AddMediaClip("photo", "inserted", visual_index=index))
+    clips = result.track(TrackKind.VISUAL).clips
+    assert clips[index].clip_id == "inserted"
+    assert clips[0].timeline_start == ProjectTime.zero()
+    assert all(left.timeline_end == right.timeline_start for left, right in pairwise(clips))
+    assert result.track(TrackKind.MUSIC) == music
+
+
+@pytest.mark.parametrize("index", [-1, 1, True])
+def test_invalid_insertion_preserves_project_and_history(index: int) -> None:
+    executor = CommandExecutor(_project(_video(), _audio()))
+    before = executor.project
+    with pytest.raises(CommandRejected):
+        executor.execute(AddMediaClip("video", "clip", visual_index=index))
+    assert executor.project == before
+    assert not executor.can_undo
+    with pytest.raises(CommandRejected):
+        executor.execute(AddMediaClip("audio", "clip", visual_index=0))
+    assert executor.project == before
 
 
 def test_first_visual_canvas_uses_display_rotation_metadata() -> None:

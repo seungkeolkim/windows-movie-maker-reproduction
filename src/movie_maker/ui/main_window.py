@@ -8,18 +8,33 @@ from collections.abc import Callable, Sequence
 from importlib.metadata import version
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal, qVersion
+from PySide6.QtCore import (
+    QMimeData,
+    QPoint,
+    QSignalBlocker,
+    QSize,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+    qVersion,
+)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QColor,
     QDesktopServices,
+    QDrag,
     QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
     QDropEvent,
     QIcon,
     QKeySequence,
     QMouseEvent,
     QPainter,
+    QPaintEvent,
+    QPen,
     QPixmap,
     QPolygon,
     QResizeEvent,
@@ -125,6 +140,29 @@ ExportResultOpener = Callable[[str], bool]
 
 AUDIO_PREVIEW_CHUNK = ProjectTime.from_seconds(30)
 LOGGER = logging.getLogger(__name__)
+LIBRARY_MEDIA_MIME = "application/x-movie-maker-library-asset"
+
+
+class _LibraryListWidget(QListWidget):
+    """Copy a stable media identity instead of moving the library's list item."""
+
+    def mimeData(self, items: Sequence[QListWidgetItem]) -> QMimeData:
+        mime = QMimeData()
+        if len(items) == 1 and items[0].flags() & Qt.ItemFlag.ItemIsDragEnabled:
+            asset_id = items[0].data(Qt.ItemDataRole.UserRole)
+            if isinstance(asset_id, str):
+                mime.setData(LIBRARY_MEDIA_MIME, asset_id.encode("utf-8"))
+        return mime
+
+    def startDrag(self, supportedActions: Qt.DropAction) -> None:
+        items = self.selectedItems()
+        mime = self.mimeData(items)
+        if not mime.hasFormat(LIBRARY_MEDIA_MIME):
+            return
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.setPixmap(items[0].icon().pixmap(QSize(120, 56)))
+        drag.exec(Qt.DropAction.CopyAction)
 
 
 class _TimelineListWidget(QListWidget):
@@ -135,12 +173,110 @@ class _TimelineListWidget(QListWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.can_drop_asset: Callable[[str], bool] | None = None
+        self.drop_asset: Callable[[str, int], bool] | None = None
+        self._asset_drop_x: int | None = None
+        self._asset_drag_point: QPoint | None = None
+        self._asset_scroll_timer = QTimer(self)
+        self._asset_scroll_timer.setInterval(40)
+        self._asset_scroll_timer.timeout.connect(self._scroll_asset_drag)
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
 
+    def _dragged_asset(self, event: QDropEvent) -> str | None:
+        if self.can_drop_asset is None:
+            return None
+        try:
+            asset_id = bytes(event.mimeData().data(LIBRARY_MEDIA_MIME).data()).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        return asset_id if self.can_drop_asset(asset_id) else None
+
+    def _insertion_position(self, point: QPoint) -> tuple[int, int]:
+        items = [
+            self.item(row) for row in range(self.count())
+            if isinstance(self.item(row).data(Qt.ItemDataRole.UserRole), str)
+        ]
+        for index, item in enumerate(items):
+            rect = self.visualItemRect(item)
+            if point.x() <= rect.center().x():
+                return index, max(2, rect.left())
+        right = self.visualItemRect(items[-1]).right() + 1 if items else 2
+        return len(items), min(self.viewport().width() - 3, right)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasFormat(LIBRARY_MEDIA_MIME):
+            if self._dragged_asset(event) is None:
+                event.ignore()
+            else:
+                event.setDropAction(Qt.DropAction.CopyAction)
+                event.accept()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if event.mimeData().hasFormat(LIBRARY_MEDIA_MIME):
+            if self._dragged_asset(event) is None:
+                self._clear_asset_drag()
+                event.ignore()
+            else:
+                self._asset_drag_point = event.position().toPoint()
+                _, self._asset_drop_x = self._insertion_position(self._asset_drag_point)
+                self._asset_scroll_timer.start()
+                event.setDropAction(Qt.DropAction.CopyAction)
+                event.accept()
+            self.viewport().update()
+            return
+        super().dragMoveEvent(event)
+
+    def _scroll_asset_drag(self) -> None:
+        point = self._asset_drag_point
+        if point is None:
+            return
+        direction = -1 if point.x() < 28 else 1 if point.x() > self.viewport().width() - 28 else 0
+        if direction:
+            bar = self.horizontalScrollBar()
+            bar.setValue(bar.value() + direction * 18)
+            _, self._asset_drop_x = self._insertion_position(point)
+            self.viewport().update()
+
+    def _clear_asset_drag(self) -> None:
+        self._asset_scroll_timer.stop()
+        self._asset_drag_point = None
+        self._asset_drop_x = None
+        self.viewport().update()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._clear_asset_drag()
+        super().dragLeaveEvent(event)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        if self._asset_drop_x is not None:
+            painter = QPainter(self.viewport())
+            painter.setPen(QPen(QColor("#1875d1"), 3))
+            x = self._asset_drop_x
+            bottom = self.viewport().height() - 3
+            painter.drawLine(x, 3, x, bottom)
+            painter.drawLine(x - 4, 3, x + 4, 3)
+            painter.drawLine(x - 4, bottom, x + 4, bottom)
+            painter.end()
+
     def dropEvent(self, event: QDropEvent) -> None:
+        self._clear_asset_drag()
+        if event.mimeData().hasFormat(LIBRARY_MEDIA_MIME):
+            asset_id = self._dragged_asset(event)
+            target, _ = self._insertion_position(event.position().toPoint())
+            if asset_id is not None and self.drop_asset is not None and self.drop_asset(
+                asset_id, target
+            ):
+                event.setDropAction(Qt.DropAction.CopyAction)
+                event.accept()
+            else:
+                event.ignore()
+            return
         if event.source() is not self or not self.selectedItems():
             event.ignore()
             return
@@ -647,6 +783,7 @@ class MainWindow(QMainWindow):
                 )
             )
             if track is TrackKind.VISUAL:
+                self._enable_library_drop(track_list)
                 track_list.move_requested.connect(
                     lambda target: self.controller.move_selected_to_index(
                         TrackKind.VISUAL, target
@@ -674,6 +811,7 @@ class MainWindow(QMainWindow):
         storyboard_layout = QVBoxLayout(storyboard_page)
         storyboard_layout.setContentsMargins(0, 0, 0, 0)
         self.storyboard_list = _TimelineListWidget()
+        self._enable_library_drop(self.storyboard_list)
         self.storyboard_list.setObjectName("E-TIMELINE-STORYBOARD")
         self.storyboard_list.setAccessibleName("시각 클립 스토리보드")
         self.storyboard_list.setFlow(QListView.Flow.LeftToRight)
@@ -755,11 +893,17 @@ class MainWindow(QMainWindow):
         self.import_warning.setProperty("role", "warning")
         self.import_warning.setVisible(False)
         layout.addWidget(self.import_warning)
-        self.library_list = QListWidget()
+        self.library_drag_hint = QLabel("영상·사진을 아래 타임라인으로 끌어 놓으세요.")
+        self.library_drag_hint.setObjectName("E-LIBRARY-DRAG-HINT")
+        self.library_drag_hint.setWordWrap(True)
+        self.library_drag_hint.setProperty("role", "caption")
+        layout.addWidget(self.library_drag_hint)
+        self.library_list = _LibraryListWidget()
         self.library_list.setObjectName("E-LIBRARY-GRID")
         self.library_list.setViewMode(QListView.ViewMode.IconMode)
         self.library_list.setResizeMode(QListView.ResizeMode.Adjust)
         self.library_list.setMovement(QListView.Movement.Static)
+        self.library_list.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
         self.library_list.setIconSize(QSize(150, 70))
         self.library_list.setGridSize(QSize(190, 112))
         self.library_list.setWordWrap(True)
@@ -1563,7 +1707,11 @@ class MainWindow(QMainWindow):
         selected_id = state.selected_asset_id
         selected_filter = self.library_filter.currentText()
         blocker = QSignalBlocker(self.library_list)
-        self.library_list.clear()
+        # Keep item identities stable while Qt is tracking a pressed/dragged card.
+        remaining = {
+            self.library_list.item(row).data(Qt.ItemDataRole.UserRole): self.library_list.item(row)
+            for row in range(self.library_list.count())
+        }
         visible_count = 0
         for asset in state.assets.values():
             if selected_filter == "문제 있음":
@@ -1587,11 +1735,17 @@ class MainWindow(QMainWindow):
                 status = "\n⚠ 썸네일 없음"
             else:
                 status = ""
-            item = QListWidgetItem(
-                self._media_icon(asset, QSize(150, 70)),
-                f"{asset.name}\n{asset.kind.value} · {duration}{status}",
-            )
+            item = remaining.pop(asset.asset_id, None)
+            if item is None:
+                item = QListWidgetItem()
+                self.library_list.addItem(item)
+            item.setIcon(self._media_icon(asset, QSize(150, 70)))
+            item.setText(f"{asset.name}\n{asset.kind.value} · {duration}{status}")
             item.setData(Qt.ItemDataRole.UserRole, asset.asset_id)
+            if self.controller.can_drop_visual_asset(asset.asset_id):
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled)
+            else:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
             tooltip = (
                 f"{asset.name}\n{asset.resolution_text}\n{asset.source_path}\n"
                 f"상태: {asset.status.value}\n썸네일: {asset.thumbnail_status}\n"
@@ -1601,10 +1755,15 @@ class MainWindow(QMainWindow):
                 tooltip += f"\n썸네일: {asset.thumbnail_error}"
             if asset.background_error is not None:
                 tooltip += f"\n작업 오류: {asset.background_error}"
+            if self.controller.can_drop_visual_asset(asset.asset_id):
+                tooltip += "\n타임라인의 원하는 클립 사이로 끌어 놓아 추가하세요."
             item.setToolTip(tooltip)
-            self.library_list.addItem(item)
             if asset.asset_id == selected_id:
                 self.library_list.setCurrentItem(item)
+        for item in remaining.values():
+            self.library_list.takeItem(self.library_list.row(item))
+        if selected_id is None:
+            self.library_list.setCurrentRow(-1)
         del blocker
         total = len(state.assets)
         self.library_empty.setVisible(visible_count == 0)
@@ -1653,7 +1812,10 @@ class MainWindow(QMainWindow):
             widget.clear()
             clips = self.controller.clips_for_track(track)
             if not clips:
-                placeholder = QListWidgetItem("＋ 여기에 미디어 추가")
+                placeholder = QListWidgetItem(
+                    "＋ 보관함의 영상·사진을 여기에 끌어 놓으세요"
+                    if track is TrackKind.VISUAL else "＋ 여기에 미디어 추가"
+                )
                 placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
                 placeholder.setSizeHint(QSize(timeline_width, 42))
                 widget.addItem(placeholder)
@@ -1718,7 +1880,7 @@ class MainWindow(QMainWindow):
             if clip.clip_id == state.selected_clip_id:
                 self.storyboard_list.setCurrentItem(item)
         if not state.visual_clips:
-            placeholder = QListWidgetItem("＋ 시각 미디어를 추가하면 카드가 표시됩니다")
+            placeholder = QListWidgetItem("＋ 보관함의 영상·사진을 여기에 끌어 놓으세요")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self.storyboard_list.addItem(placeholder)
         del storyboard_blocker
@@ -2422,6 +2584,12 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     # User intent adapters
+
+    def _enable_library_drop(self, widget: _TimelineListWidget) -> None:
+        widget.can_drop_asset = self.controller.can_drop_visual_asset
+        widget.drop_asset = lambda asset_id, index: self.controller.add_asset_to_timeline(
+            asset_id, visual_index=index
+        )
 
     def _select_library_item(
         self,

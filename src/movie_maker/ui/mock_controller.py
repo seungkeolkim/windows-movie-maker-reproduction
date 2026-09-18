@@ -1528,6 +1528,25 @@ class MockController(QObject):
         if asset is None:
             self._set_status("먼저 보관함에서 미디어를 선택하세요")
             return False
+        return self.add_asset_to_timeline(asset.asset_id, narration=narration)
+
+    def can_drop_visual_asset(self, asset_id: str) -> bool:
+        asset = self.state.assets.get(asset_id)
+        return (
+            asset is not None
+            and asset.status is AssetStatus.READY
+            and asset.kind in {MediaKind.VIDEO, MediaKind.PHOTO}
+        )
+
+    def add_asset_to_timeline(
+        self, asset_id: str, *, narration: bool = False, visual_index: int | None = None
+    ) -> bool:
+        """Add the dragged asset by identity, independent of the current selection."""
+        asset = self.state.assets.get(asset_id)
+        if asset is None:
+            return False
+        if visual_index is not None and not self.can_drop_visual_asset(asset_id):
+            return False
         if asset.status is not AssetStatus.READY:
             self._set_status("누락되거나 읽을 수 없는 미디어는 추가할 수 없습니다")
             return False
@@ -1543,6 +1562,7 @@ class MockController(QObject):
                 asset.asset_id,
                 clip_id,
                 narration=explicit_narration,
+                visual_index=visual_index,
             ),
             "타임라인에 미디어를 추가했습니다",
         )

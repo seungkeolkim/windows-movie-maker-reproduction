@@ -274,7 +274,7 @@ class _ReplaceOneClip:
 
 @dataclass(frozen=True, slots=True)
 class AddMediaClip:
-    """Create and append a correctly routed clip for one project media reference."""
+    """Create a correctly routed clip, optionally inserting into the visual track."""
 
     asset_id: str
     clip_id: str
@@ -282,6 +282,7 @@ class AddMediaClip:
     timeline_start: ProjectTime | None = None
     label_text: str | None = None
     photo_duration: ProjectTime = DEFAULT_PHOTO_DURATION
+    visual_index: int | None = None
 
     @property
     def label(self) -> str:
@@ -304,6 +305,8 @@ class AddMediaClip:
             track_kind = TrackKind.VISUAL
         else:
             track_kind = TrackKind.NARRATION if self.narration else TrackKind.MUSIC
+            if self.visual_index is not None:
+                raise CommandRejected("오디오는 영상·사진 트랙에 추가할 수 없습니다.")
 
         if media.kind is MediaKind.PHOTO:
             if not MIN_PHOTO_DURATION <= self.photo_duration <= MAX_PHOTO_DURATION:
@@ -319,7 +322,9 @@ class AddMediaClip:
         track = project.track(track_kind)
         if track_kind is TrackKind.VISUAL:
             start = project.duration
-            index = len(track.clips)
+            index = len(track.clips) if self.visual_index is None else self.visual_index
+            if type(index) is not int or not 0 <= index <= len(track.clips):
+                raise CommandRejected("클립을 추가할 위치가 유효하지 않습니다.")
         else:
             start = self.timeline_start or max(
                 (clip.timeline_end for clip in track.clips),
