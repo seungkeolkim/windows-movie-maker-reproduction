@@ -9,6 +9,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QEvent,
     QMimeData,
     QPoint,
     QRect,
@@ -376,6 +377,11 @@ class _TimelinePlayhead(QWidget):
     def set_position(self, x: int, top: int) -> None:
         self._x = x
         self._top = top
+        if self._dragging:
+            # Rebuilding scrolled tracks can temporarily move the cursor offscreen.
+            # Keep the input region and visibility stable until the mouse is released.
+            self.update()
+            return
         if x >= 0:
             self.setMask(
                 QRegion(QRect(x - 7, top, 15, 12))
@@ -387,6 +393,8 @@ class _TimelinePlayhead(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
+            self.clearMask()
+            self.grabMouse()
             event.accept()
             return
         super().mousePressEvent(event)
@@ -401,10 +409,21 @@ class _TimelinePlayhead(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._dragging:
             self._dragging = False
+            self.releaseMouse()
             self.seek_requested.emit(round(event.position().x()))
+            self.set_position(self._x, self._top)
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def event(self, event: QEvent) -> bool:
+        if self._dragging and event.type() in (QEvent.Type.UngrabMouse, QEvent.Type.Hide):
+            self._dragging = False
+            if QWidget.mouseGrabber() is self:
+                self.releaseMouse()
+            if event.type() == QEvent.Type.UngrabMouse:
+                self.set_position(self._x, self._top)
+        return super().event(event)
 
     def paintEvent(self, _event) -> None:  # type: ignore[no-untyped-def]
         if self._x < 0:

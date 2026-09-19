@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QWidget
 
 from movie_maker.ui.main_window import MainWindow
 from movie_maker.ui.mock_model import TrackKind
@@ -100,3 +101,64 @@ def test_empty_timeline_has_no_draggable_playhead(qtbot):
     window.show()
     QApplication.processEvents()
     assert not window.timeline_playhead.isVisible()
+
+
+@pytest.mark.parametrize("zoom", [125, 175, 200])
+def test_scrolled_playhead_stays_visible_through_continuous_drag(window, qtbot, zoom):
+    controller = window.controller
+    controller.set_timeline_zoom(zoom)
+    QApplication.processEvents()
+    bar = window.timeline_scrollbar
+    bar.setValue(bar.maximum())
+    controller.seek(round(controller.state.total_duration_ms * 0.8))
+    QApplication.processEvents()
+    playhead = window.timeline_playhead
+    hidden = []
+
+    class VisibilityObserver(QObject):
+        def eventFilter(self, watched, event):
+            if event.type() == QEvent.Type.Hide:
+                hidden.append(True)
+            return False
+
+    observer = VisibilityObserver(playhead)
+    playhead.installEventFilter(observer)
+    scroll_position = bar.value()
+    start_x = playhead._x
+    handle = window.windowHandle()
+    QTest.mousePress(handle, Qt.MouseButton.LeftButton,
+                     pos=playhead.mapTo(window, QPoint(start_x, 4)))
+    try:
+        assert QWidget.mouseGrabber() is playhead
+        previous = controller.state.playhead_ms
+        for delta in (8, 16, 32, 48, 64):
+            QTest.mouseMove(handle, playhead.mapTo(window, QPoint(start_x + delta, 4)))
+            QApplication.processEvents()
+            assert not hidden, "Hiding the playhead releases Qt's mouse grab during a drag"
+            assert controller.state.playhead_ms > previous
+            assert abs(playhead._x - (start_x + delta)) <= 1
+            assert bar.value() == scroll_position
+            assert QWidget.mouseGrabber() is playhead
+            assert playhead.mask().isEmpty()
+            previous = controller.state.playhead_ms
+    finally:
+        QTest.mouseRelease(handle, Qt.MouseButton.LeftButton,
+                           pos=playhead.mapTo(window, QPoint(playhead._x, 4)))
+    assert QWidget.mouseGrabber() is not playhead
+    assert not playhead._dragging
+    assert playhead.mask().contains(QPoint(playhead._x, 4))
+    assert not playhead.mask().contains(QPoint(playhead._x - 30, 4))
+
+
+def test_drag_survives_transient_offscreen_position_and_cancels_on_hide(window, qtbot):
+    playhead = window.timeline_playhead
+    start_x = playhead._x
+    qtbot.mousePress(playhead, Qt.MouseButton.LeftButton, pos=QPoint(start_x, 4))
+    playhead.set_position(-1, 0)
+    assert playhead.isVisible()
+    assert QWidget.mouseGrabber() is playhead
+    playhead.set_position(start_x, 0)
+    window.hide()
+    assert not playhead.isVisible()
+    assert not playhead._dragging
+    assert QWidget.mouseGrabber() is not playhead
