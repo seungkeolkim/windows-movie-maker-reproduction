@@ -147,7 +147,44 @@ def test_scrolled_playhead_stays_visible_through_continuous_drag(window, qtbot, 
     assert QWidget.mouseGrabber() is not playhead
     assert not playhead._dragging
     assert playhead.mask().contains(QPoint(playhead._x, 4))
-    assert not playhead.mask().contains(QPoint(playhead._x - 30, 4))
+    assert not playhead.mask().contains(QPoint(playhead._x - 30, 24))
+
+
+@pytest.mark.parametrize("zoom", [100, 200])
+def test_clicking_playhead_strip_seeks_with_scroll_offset(window, zoom):
+    controller = window.controller
+    controller.set_timeline_zoom(zoom)
+    controller.seek(0)
+    QApplication.processEvents()
+    bar = window.timeline_scrollbar
+    bar.setValue(bar.maximum())
+    playhead = window.timeline_playhead
+    view = window._timeline_lists[TrackKind.VISUAL]
+    origin = view.viewport().mapTo(window.timeline_page, QPoint(0, 0)).x()
+    offset = bar.value()
+    before = controller.media_project
+    history = controller.history_count
+    if zoom == 200:
+        assert playhead._x == -1  # The strip remains clickable with the cursor offscreen.
+    for fraction in (0.7, 0.2):
+        local_x = round(view.viewport().width() * fraction)
+        point = QPoint(origin + local_x, 4)
+        assert window.timeline_page.childAt(point) is playhead
+        expected = round((offset + local_x) / window._timeline_width
+                         * controller.state.total_duration_ms)
+        handle = window.windowHandle()
+        position = playhead.mapTo(window, point)
+        QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=position)
+        try:
+            assert abs(controller.state.playhead_ms - expected) <= 1
+        finally:
+            QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=position)
+        QApplication.processEvents()
+        assert abs(playhead._x - point.x()) <= 1
+        assert window.preview_seek.value() == controller.state.playhead_ms
+        assert bar.value() == offset
+    assert controller.media_project == before
+    assert controller.history_count == history
 
 
 def test_drag_survives_transient_offscreen_position_and_cancels_on_hide(window, qtbot):

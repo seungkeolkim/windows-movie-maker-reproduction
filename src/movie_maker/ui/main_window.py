@@ -368,26 +368,31 @@ class _TimelinePlayhead(QWidget):
         super().__init__(parent)
         self._x = -1
         self._top = 0
+        self._seek_area = QRect()
         self._dragging = False
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         self.setAccessibleName("타임라인 재생 헤드")
-        self.setToolTip("드래그하여 재생 위치 이동")
+        self.setToolTip("상단 공간을 클릭하거나 재생 헤드를 드래그하여 재생 위치 이동")
 
-    def set_position(self, x: int, top: int) -> None:
+    def set_position(self, x: int, top: int, seek_area: QRect | None = None) -> None:
         self._x = x
         self._top = top
+        if seek_area is not None:
+            self._seek_area = seek_area
         if self._dragging:
             # Rebuilding scrolled tracks can temporarily move the cursor offscreen.
             # Keep the input region and visibility stable until the mouse is released.
             self.update()
             return
+        region = QRegion(self._seek_area)
         if x >= 0:
-            self.setMask(
+            region |= (
                 QRegion(QRect(x - 7, top, 15, 12))
                 | QRegion(QRect(x - 3, top + 12, 7, max(1, self.height() - top - 12)))
             )
-        self.setVisible(x >= 0)
+        self.setMask(region)
+        self.setVisible(not region.isEmpty())
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -395,6 +400,8 @@ class _TimelinePlayhead(QWidget):
             self._dragging = True
             self.clearMask()
             self.grabMouse()
+            if self._seek_area.contains(event.position().toPoint()):
+                self.seek_requested.emit(round(event.position().x()))
             event.accept()
             return
         super().mousePressEvent(event)
@@ -2037,7 +2044,7 @@ class MainWindow(QMainWindow):
             return
         total = self.controller.state.total_duration_ms
         if total <= 0 or not self._timeline_lists:
-            self.timeline_playhead.set_position(-1, 0)
+            self.timeline_playhead.set_position(-1, 0, QRect())
             return
         reference = self._timeline_lists[TrackKind.VISUAL]
         origin = reference.viewport().mapTo(page, QPoint(0, 0))
@@ -2046,7 +2053,11 @@ class MainWindow(QMainWindow):
         x = origin.x() + round(self.controller.state.playhead_ms / total * timeline_width) - offset
         top = 0
         viewport_right = origin.x() + reference.viewport().width()
-        self.timeline_playhead.set_position(x if origin.x() <= x <= viewport_right else -1, top)
+        self.timeline_playhead.set_position(
+            x if origin.x() <= x <= viewport_right else -1,
+            top,
+            QRect(origin.x(), top, reference.viewport().width(), 12),
+        )
 
     def _seek_timeline_playhead(self, x: int) -> None:
         reference = self._timeline_lists[TrackKind.VISUAL]
