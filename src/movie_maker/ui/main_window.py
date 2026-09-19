@@ -363,17 +363,51 @@ class _TimelinePlayhead(QWidget):
     """Drag the project-time cursor without intercepting other track input."""
 
     seek_requested = Signal(int)
+    RULER_HEIGHT = 38
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self._x = -1
         self._top = 0
         self._seek_area = QRect()
+        self._duration_ms = 0
+        self._content_width = 1
+        self._scroll_offset = 0
         self._dragging = False
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         self.setAccessibleName("타임라인 재생 헤드")
         self.setToolTip("상단 공간을 클릭하거나 재생 헤드를 드래그하여 재생 위치 이동")
+
+    def set_scale(self, duration_ms: int, content_width: int, scroll_offset: int) -> None:
+        self._duration_ms = duration_ms
+        self._content_width = max(1, content_width)
+        self._scroll_offset = scroll_offset
+
+    def ruler_ticks(self) -> list[tuple[int, int, bool]]:
+        """Return visible (milliseconds, x, major) marks with readable label spacing."""
+        if self._duration_ms <= 0:
+            return []
+        minimum_step = self._duration_ms * 110 / self._content_width
+        magnitude = 1
+        while magnitude * 10 < minimum_step:
+            magnitude *= 10
+        major_step = next(magnitude * factor for factor in (1, 2, 5, 10)
+                          if magnitude * factor >= minimum_step)
+        minor_step = max(1, major_step // 5)
+        first_ms = self._scroll_offset * self._duration_ms // self._content_width
+        last_ms = min(self._duration_ms, round(
+            (self._scroll_offset + self._seek_area.width())
+            * self._duration_ms / self._content_width
+        ))
+        ticks = []
+        for time_ms in range(first_ms // minor_step * minor_step, last_ms + 1, minor_step):
+            x = (self._seek_area.left()
+                 + round(time_ms / self._duration_ms * self._content_width)
+                 - self._scroll_offset)
+            if self._seek_area.left() <= x <= self._seek_area.right():
+                ticks.append((time_ms, x, time_ms % major_step == 0))
+        return ticks
 
     def set_position(self, x: int, top: int, seek_area: QRect | None = None) -> None:
         self._x = x
@@ -433,9 +467,31 @@ class _TimelinePlayhead(QWidget):
         return super().event(event)
 
     def paintEvent(self, _event) -> None:  # type: ignore[no-untyped-def]
-        if self._x < 0:
-            return
         painter = QPainter(self)
+        if not self._seek_area.isEmpty():
+            painter.save()
+            painter.setClipRect(self._seek_area)
+            painter.fillRect(self._seek_area, QColor("#e3edf9"))
+            painter.setPen(QColor("#9bb3ce"))
+            bottom = self._seek_area.bottom()
+            painter.drawLine(self._seek_area.left(), bottom, self._seek_area.right(), bottom)
+            font = painter.font()
+            font.setPixelSize(11)
+            painter.setFont(font)
+            for time_ms, x, major in self.ruler_ticks():
+                painter.setPen(QColor("#58718f" if major else "#a4b9d1"))
+                painter.drawLine(x, bottom - (10 if major else 4), x, bottom)
+                if major:
+                    label = format_time(time_ms)
+                    label_width = painter.fontMetrics().horizontalAdvance(label)
+                    label_x = min(x + 4, self._seek_area.right() - label_width - 3)
+                    painter.setPen(QColor("#294564"))
+                    painter.drawText(max(self._seek_area.left() + 3, label_x),
+                                     self._top + 22, label)
+            painter.restore()
+        if self._x < 0:
+            painter.end()
+            return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(QColor("#e53935"))
         painter.setBrush(QColor("#e53935"))
@@ -805,7 +861,7 @@ class MainWindow(QMainWindow):
         timeline_layout.setSpacing(5)
 
         self._timeline_width = 1
-        timeline_layout.addSpacing(12)
+        timeline_layout.addSpacing(_TimelinePlayhead.RULER_HEIGHT)
 
         for track in TrackKind:
             row = QHBoxLayout()
@@ -2050,13 +2106,14 @@ class MainWindow(QMainWindow):
         origin = reference.viewport().mapTo(page, QPoint(0, 0))
         timeline_width = self._timeline_width
         offset = reference.horizontalScrollBar().value()
+        self.timeline_playhead.set_scale(total, timeline_width, offset)
         x = origin.x() + round(self.controller.state.playhead_ms / total * timeline_width) - offset
         top = 0
         viewport_right = origin.x() + reference.viewport().width()
         self.timeline_playhead.set_position(
             x if origin.x() <= x <= viewport_right else -1,
             top,
-            QRect(origin.x(), top, reference.viewport().width(), 12),
+            QRect(origin.x(), top, reference.viewport().width(), _TimelinePlayhead.RULER_HEIGHT),
         )
 
     def _seek_timeline_playhead(self, x: int) -> None:

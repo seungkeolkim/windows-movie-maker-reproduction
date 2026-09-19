@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pytest
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt
 from PySide6.QtTest import QTest
@@ -147,7 +149,7 @@ def test_scrolled_playhead_stays_visible_through_continuous_drag(window, qtbot, 
     assert QWidget.mouseGrabber() is not playhead
     assert not playhead._dragging
     assert playhead.mask().contains(QPoint(playhead._x, 4))
-    assert not playhead.mask().contains(QPoint(playhead._x - 30, 24))
+    assert not playhead.mask().contains(QPoint(playhead._x - 30, playhead.RULER_HEIGHT + 12))
 
 
 @pytest.mark.parametrize("zoom", [100, 200])
@@ -199,3 +201,29 @@ def test_drag_survives_transient_offscreen_position_and_cancels_on_hide(window, 
     assert not playhead.isVisible()
     assert not playhead._dragging
     assert QWidget.mouseGrabber() is not playhead
+
+
+@pytest.mark.parametrize("zoom", [50, 100, 200])
+def test_ruler_marks_match_seek_times_and_remain_readable(window, zoom, tmp_path):
+    controller = window.controller
+    controller.set_timeline_zoom(zoom)
+    controller.seek(0)
+    QApplication.processEvents()
+    window.timeline_scrollbar.setValue(window.timeline_scrollbar.maximum())
+    ruler = window.timeline_playhead
+    ticks = ruler.ruler_ticks()
+    major_ticks = [(time, x) for time, x, major in ticks if major]
+    assert len(major_ticks) >= 2
+    assert any(not major for _, _, major in ticks)
+    assert all(right[1] - left[1] >= 109
+               for left, right in pairwise(major_ticks))
+    time, x = major_ticks[1]
+    point = ruler.mapTo(window, QPoint(x, ruler.RULER_HEIGHT - 3))
+    QTest.mouseClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=point)
+    QApplication.processEvents()
+    tolerance = controller.state.total_duration_ms / window._timeline_width
+    assert abs(controller.state.playhead_ms - time) <= tolerance
+    assert abs(ruler._x - x) <= 1
+    image = ruler.grab().toImage()
+    assert image.pixelColor(ruler._seek_area.left() + 20, 9).name() == "#e3edf9"
+    assert window.grab().save(str(tmp_path / f"timeline-ruler-{zoom}.png"))
