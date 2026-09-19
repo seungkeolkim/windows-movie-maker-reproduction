@@ -11,6 +11,7 @@ from pathlib import Path
 from PySide6.QtCore import (
     QMimeData,
     QPoint,
+    QRect,
     QSignalBlocker,
     QSize,
     Qt,
@@ -37,6 +38,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QPolygon,
+    QRegion,
     QResizeEvent,
     QWheelEvent,
 )
@@ -61,6 +63,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QScrollBar,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -356,19 +359,52 @@ class _SeekSlider(QSlider):
 
 
 class _TimelinePlayhead(QWidget):
-    """Paint one project-time cursor through every fixed timeline track."""
+    """Drag the project-time cursor without intercepting other track input."""
+
+    seek_requested = Signal(int)
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self._x = -1
         self._top = 0
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._dragging = False
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setAccessibleName("타임라인 재생 헤드")
+        self.setToolTip("드래그하여 재생 위치 이동")
 
     def set_position(self, x: int, top: int) -> None:
         self._x = x
         self._top = top
+        if x >= 0:
+            self.setMask(
+                QRegion(QRect(x - 7, top, 15, 12))
+                | QRegion(QRect(x - 3, top + 12, 7, max(1, self.height() - top - 12)))
+            )
+        self.setVisible(x >= 0)
         self.update()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._dragging:
+            self.seek_requested.emit(round(event.position().x()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self._dragging = False
+            self.seek_requested.emit(round(event.position().x()))
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def paintEvent(self, _event) -> None:  # type: ignore[no-untyped-def]
         if self._x < 0:
@@ -742,30 +778,8 @@ class MainWindow(QMainWindow):
         timeline_layout.setContentsMargins(0, 0, 0, 0)
         timeline_layout.setSpacing(5)
 
-        ruler_row = QHBoxLayout()
-        ruler_row.setContentsMargins(0, 0, 0, 0)
-        ruler_row.setSpacing(0)
-        ruler_spacer = QWidget()
-        ruler_spacer.setFixedWidth(74)
-        ruler_row.addWidget(ruler_spacer)
-        self.timeline_ruler_scroll = QScrollArea()
-        self.timeline_ruler_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.timeline_ruler_scroll.setWidgetResizable(False)
-        self.timeline_ruler_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        self.timeline_ruler_scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        self.timeline_ruler_scroll.setFixedHeight(30)
-        self.timeline_ruler = _SeekSlider(Qt.Orientation.Horizontal)
-        self.timeline_ruler.setObjectName("E-TIMELINE-RULER")
-        self.timeline_ruler.setAccessibleName("타임라인 눈금과 재생 헤드")
-        self.timeline_ruler.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.timeline_ruler.sliderMoved.connect(self._seek_preview)
-        self.timeline_ruler_scroll.setWidget(self.timeline_ruler)
-        ruler_row.addWidget(self.timeline_ruler_scroll, 1)
-        timeline_layout.addLayout(ruler_row)
+        self._timeline_width = 1
+        timeline_layout.addSpacing(12)
 
         for track in TrackKind:
             row = QHBoxLayout()
@@ -817,8 +831,20 @@ class MainWindow(QMainWindow):
             )
             row.addWidget(track_list, 1)
             timeline_layout.addLayout(row)
+        scroll_row = QHBoxLayout()
+        scroll_row.setContentsMargins(74, 0, 0, 0)
+        self.timeline_scrollbar = QScrollBar(Qt.Orientation.Horizontal)
+        self.timeline_scrollbar.setObjectName("E-TIMELINE-SCROLL")
+        self.timeline_scrollbar.setAccessibleName("타임라인 가로 스크롤")
+        self.timeline_scrollbar.hide()
+        reference_scrollbar = self._timeline_lists[TrackKind.VISUAL].horizontalScrollBar()
+        self.timeline_scrollbar.valueChanged.connect(reference_scrollbar.setValue)
+        reference_scrollbar.rangeChanged.connect(self._update_timeline_scrollbar)
+        scroll_row.addWidget(self.timeline_scrollbar)
+        timeline_layout.addLayout(scroll_row)
         self.timeline_playhead = _TimelinePlayhead(timeline_page)
         self.timeline_playhead.setObjectName("E-TIMELINE-GLOBAL-PLAYHEAD")
+        self.timeline_playhead.seek_requested.connect(self._seek_timeline_playhead)
         self.timeline_views.addWidget(timeline_page)
 
         storyboard_page = QWidget()
@@ -1832,6 +1858,8 @@ class MainWindow(QMainWindow):
             default=1,
         )
         timeline_width = max(1, round(viewport_width * state.timeline_zoom / 100))
+        self._timeline_width = timeline_width
+        scroll_position = self.timeline_scrollbar.value()
         for track, widget in self._timeline_lists.items():
             blocker = QSignalBlocker(widget)
             widget.clear()
@@ -1893,6 +1921,16 @@ class MainWindow(QMainWindow):
                     item.setSelected(True)
                 if clip.clip_id == state.selected_clip_id:
                     widget.setCurrentItem(item)
+            # Every track spans project time, including its empty trailing region.
+            if clips and cursor_ms < total:
+                spacer = QListWidgetItem()
+                spacer.setFlags(Qt.ItemFlag.NoItemFlags)
+                spacer.setData(Qt.ItemDataRole.UserRole + 1, "timeline-gap")
+                spacer.setSizeHint(QSize(
+                    max(1, round((total - cursor_ms) / total * timeline_width)), 36
+                ))
+                widget.addItem(spacer)
+            widget.doItemsLayout()
             del blocker
         storyboard_blocker = QSignalBlocker(self.storyboard_list)
         self.storyboard_list.clear()
@@ -1927,13 +1965,6 @@ class MainWindow(QMainWindow):
             f"음악 {len(state.music_clips)}개 · 내레이션 {len(state.narration_clips)}개 · "
             f"텍스트 {len(state.text_clips)}개 · 재생 위치 {format_time(state.playhead_ms)}"
         )
-        self.timeline_ruler.setFixedSize(timeline_width, 28)
-        self.timeline_ruler.setRange(0, total)
-        self.timeline_ruler.setTickInterval(
-            max(1_000, round(max(total, 1_000) / (10 * state.timeline_zoom / 100)))
-        )
-        self.timeline_ruler.setValue(state.playhead_ms)
-        self.timeline_ruler.setEnabled(total > 0)
         self.timeline_time.setText(f"{format_time(state.playhead_ms)} / {format_time(total)}")
         mode_blocker = QSignalBlocker(self.timeline_mode_combo)
         self.timeline_mode_combo.setCurrentText(state.timeline_mode)
@@ -1942,7 +1973,21 @@ class MainWindow(QMainWindow):
         zoom_blocker = QSignalBlocker(self.timeline_zoom)
         self.timeline_zoom.setValue(state.timeline_zoom)
         del zoom_blocker
+        self._update_timeline_scrollbar()
+        reference = self._timeline_lists[TrackKind.VISUAL]
+        reference.horizontalScrollBar().setValue(scroll_position)
+        self._sync_timeline_scroll(reference, reference.horizontalScrollBar().value())
         QTimer.singleShot(0, self._update_timeline_playhead)
+
+    def _update_timeline_scrollbar(self) -> None:
+        reference = self._timeline_lists[TrackKind.VISUAL].horizontalScrollBar()
+        blocker = QSignalBlocker(self.timeline_scrollbar)
+        self.timeline_scrollbar.setRange(reference.minimum(), reference.maximum())
+        self.timeline_scrollbar.setPageStep(reference.pageStep())
+        self.timeline_scrollbar.setSingleStep(24)
+        self.timeline_scrollbar.setValue(reference.value())
+        self.timeline_scrollbar.setVisible(reference.maximum() > 0)
+        del blocker
 
     def _sync_timeline_scroll(self, source: _TimelineListWidget, value: int) -> None:
         source_maximum = max(source.horizontalScrollBar().maximum(), 1)
@@ -1952,11 +1997,11 @@ class MainWindow(QMainWindow):
             for widget in self._timeline_lists.values()
             if widget is not source
         ]
-        targets.append(self.timeline_ruler_scroll.horizontalScrollBar())
         for scrollbar in targets:
             blocker = QSignalBlocker(scrollbar)
             scrollbar.setValue(round(ratio * scrollbar.maximum()))
             del blocker
+        self._update_timeline_scrollbar()
         self._update_timeline_playhead()
 
     def _update_timeline_playhead(self) -> None:
@@ -1964,7 +2009,9 @@ class MainWindow(QMainWindow):
             return
         page = self.timeline_page
         try:
-            self.timeline_playhead.setGeometry(page.rect())
+            last_track = self._timeline_lists[TrackKind.TEXT]
+            bottom = last_track.mapTo(page, QPoint(0, last_track.height())).y()
+            self.timeline_playhead.setGeometry(0, 0, page.width(), bottom)
             self.timeline_playhead.raise_()
         except RuntimeError:
             # A zero-delay layout update may arrive after Qt has destroyed the window.
@@ -1975,12 +2022,21 @@ class MainWindow(QMainWindow):
             return
         reference = self._timeline_lists[TrackKind.VISUAL]
         origin = reference.viewport().mapTo(page, QPoint(0, 0))
-        timeline_width = self.timeline_ruler.width()
+        timeline_width = self._timeline_width
         offset = reference.horizontalScrollBar().value()
         x = origin.x() + round(self.controller.state.playhead_ms / total * timeline_width) - offset
-        top = self.timeline_ruler_scroll.mapTo(page, QPoint(0, 0)).y()
+        top = 0
         viewport_right = origin.x() + reference.viewport().width()
         self.timeline_playhead.set_position(x if origin.x() <= x <= viewport_right else -1, top)
+
+    def _seek_timeline_playhead(self, x: int) -> None:
+        reference = self._timeline_lists[TrackKind.VISUAL]
+        origin = reference.viewport().mapTo(self.timeline_page, QPoint(0, 0)).x()
+        visible_x = min(max(x - origin, 0), reference.viewport().width())
+        content_x = visible_x + reference.horizontalScrollBar().value()
+        total = self.controller.state.total_duration_ms
+        position = round(content_x / max(1, self._timeline_width) * total)
+        self._seek_preview(min(total, max(0, position)))
 
     def _clip_icon(self, clip: MockClip, asset: MockAsset | None) -> QIcon:
         if asset is not None:
