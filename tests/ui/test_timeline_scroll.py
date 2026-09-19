@@ -5,7 +5,7 @@ from itertools import pairwise
 import pytest
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 from movie_maker.ui.main_window import MainWindow
 from movie_maker.ui.mock_model import TrackKind
@@ -227,3 +227,53 @@ def test_ruler_marks_match_seek_times_and_remain_readable(window, zoom, tmp_path
     image = ruler.grab().toImage()
     assert image.pixelColor(ruler._seek_area.left() + 20, 9).name() == "#e3edf9"
     assert window.grab().save(str(tmp_path / f"timeline-ruler-{zoom}.png"))
+
+
+def test_zoom_buttons_multiply_show_scale_and_reset_without_editing(window, qtbot, tmp_path):
+    controller = window.controller
+    before = controller.media_project
+    history = controller.history_count
+    position = controller.state.playhead_ms
+    zoom_in = window.findChild(QPushButton, "E-TIMELINE-ZOOM-IN")
+    zoom_out = window.findChild(QPushButton, "E-TIMELINE-ZOOM-OUT")
+    reset = window.findChild(QPushButton, "E-TIMELINE-ZOOM-RESET")
+    for expected in (2, 4, 8, 16):
+        qtbot.mouseClick(zoom_in, Qt.MouseButton.LeftButton)
+        QApplication.processEvents()
+        assert controller.state.timeline_zoom == expected * 100
+        assert window.timeline_zoom.text() == f"{expected}배"
+        assert window._timeline_width > window._timeline_lists[TrackKind.VISUAL].width()
+    assert window.grab().save(str(tmp_path / "timeline-zoom-16x.png"))
+    qtbot.mouseClick(reset, Qt.MouseButton.LeftButton)
+    assert window.timeline_zoom.text() == "1배"
+    for expected in (0.5, 0.25, 0.125, 0.0625, 0.03125):
+        qtbot.mouseClick(zoom_out, Qt.MouseButton.LeftButton)
+        QApplication.processEvents()
+        assert controller.state.timeline_zoom == expected * 100
+        assert window.timeline_zoom.text() == f"{expected}배"
+    qtbot.mouseClick(reset, Qt.MouseButton.LeftButton)
+    assert controller.state.timeline_zoom == 100
+    assert controller.state.playhead_ms == position
+    assert controller.media_project == before
+    assert controller.history_count == history
+
+
+def test_pointer_zoom_doubles_halves_and_preserves_anchor(window):
+    view = window._timeline_lists[TrackKind.VISUAL]
+    x = view.viewport().width() // 2
+    for _ in range(3):
+        bar = view.horizontalScrollBar()
+        fraction = (bar.value() + x) / window._timeline_width
+        window._zoom_timeline_at(view, 1, x)
+        QApplication.processEvents()
+        assert abs((bar.value() + x) / window._timeline_width - fraction) < 0.01
+    assert window.controller.state.timeline_zoom == 800
+    window._zoom_timeline_at(view, -1, x)
+    assert window.controller.state.timeline_zoom == 400
+
+
+@pytest.mark.parametrize("value", [0, -100, float("inf"), float("nan")])
+def test_invalid_zoom_preserves_previous_scale(window, value):
+    previous = window.controller.state.timeline_zoom
+    assert not window.controller.set_timeline_zoom(value)
+    assert window.controller.state.timeline_zoom == previous

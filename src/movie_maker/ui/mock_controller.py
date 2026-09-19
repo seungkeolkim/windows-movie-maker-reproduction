@@ -2792,16 +2792,16 @@ class MockController(QObject):
         self.state_changed.emit()
         return True
 
-    def set_timeline_zoom(self, zoom: int) -> bool:
+    def set_timeline_zoom(self, zoom: float) -> bool:
         try:
             normalised = normalise_timeline_zoom(zoom)
-        except TypeError as error:
+        except (TypeError, ValueError) as error:
             self._set_status(str(error))
             return False
         if self.state.timeline_zoom == normalised:
             return True
         self.state.timeline_zoom = normalised
-        self._set_status(f"타임라인 확대 {self.state.timeline_zoom}%")
+        self._set_status(f"타임라인 배율 {self.state.timeline_zoom / 100:g}배")
         self.state_changed.emit()
         return True
 

@@ -804,24 +804,30 @@ class MainWindow(QMainWindow):
         zoom_label.setProperty("role", "caption")
         header.addWidget(zoom_label)
         zoom_out = QPushButton("−")
-        zoom_out.setToolTip("타임라인 축소")
+        zoom_out.setObjectName("E-TIMELINE-ZOOM-OUT")
+        zoom_out.setToolTip("현재 배율의 절반으로 축소")
         zoom_out.clicked.connect(
-            lambda: self.controller.set_timeline_zoom(self.controller.state.timeline_zoom - 25)
+            lambda: self.controller.set_timeline_zoom(self.controller.state.timeline_zoom / 2)
         )
         header.addWidget(zoom_out)
-        self.timeline_zoom = QSlider(Qt.Orientation.Horizontal)
+        self.timeline_zoom = QLabel("1배")
         self.timeline_zoom.setObjectName("E-TIMELINE-ZOOM")
-        self.timeline_zoom.setRange(50, 200)
-        self.timeline_zoom.setSingleStep(25)
-        self.timeline_zoom.setFixedWidth(90)
-        self.timeline_zoom.sliderMoved.connect(self.controller.set_timeline_zoom)
+        self.timeline_zoom.setAccessibleName("현재 타임라인 배율")
+        self.timeline_zoom.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.timeline_zoom.setMinimumWidth(65)
         header.addWidget(self.timeline_zoom)
         zoom_in = QPushButton("＋")
-        zoom_in.setToolTip("타임라인 확대")
+        zoom_in.setObjectName("E-TIMELINE-ZOOM-IN")
+        zoom_in.setToolTip("현재 배율의 두 배로 확대")
         zoom_in.clicked.connect(
-            lambda: self.controller.set_timeline_zoom(self.controller.state.timeline_zoom + 25)
+            lambda: self.controller.set_timeline_zoom(self.controller.state.timeline_zoom * 2)
         )
         header.addWidget(zoom_in)
+        zoom_reset = QPushButton("1배 리셋")
+        zoom_reset.setObjectName("E-TIMELINE-ZOOM-RESET")
+        zoom_reset.setToolTip("타임라인 배율을 1배로 되돌리기")
+        zoom_reset.clicked.connect(lambda: self.controller.set_timeline_zoom(100))
+        header.addWidget(zoom_reset)
         layout.addLayout(header)
 
         command_row = QHBoxLayout()
@@ -1939,7 +1945,11 @@ class MainWindow(QMainWindow):
             (widget.viewport().width() for widget in self._timeline_lists.values()),
             default=1,
         )
-        timeline_width = max(1, round(viewport_width * state.timeline_zoom / 100))
+        # Qt item geometry uses signed 32-bit pixels. Keep extreme zoom requests
+        # representable without imposing the former user-facing zoom range.
+        timeline_width = max(1, round(min(
+            (2**31 - 1) // 2, viewport_width * (state.timeline_zoom / 100)
+        )))
         self._timeline_width = timeline_width
         scroll_position = self.timeline_scrollbar.value()
         for track, widget in self._timeline_lists.items():
@@ -2031,7 +2041,7 @@ class MainWindow(QMainWindow):
             item.setToolTip(
                 f"스토리보드 순서 {index} · 시작 {format_time(clip.start_ms)}"
             )
-            width = int(180 * state.timeline_zoom / 100)
+            width = int(min(360, 180 * (state.timeline_zoom / 100)))
             item.setSizeHint(QSize(max(140, min(width, 360)), 94))
             self.storyboard_list.addItem(item)
             if clip.clip_id in state.selected_clip_ids:
@@ -2052,9 +2062,7 @@ class MainWindow(QMainWindow):
         self.timeline_mode_combo.setCurrentText(state.timeline_mode)
         del mode_blocker
         self.timeline_views.setCurrentIndex(1 if state.timeline_mode == "스토리보드" else 0)
-        zoom_blocker = QSignalBlocker(self.timeline_zoom)
-        self.timeline_zoom.setValue(state.timeline_zoom)
-        del zoom_blocker
+        self.timeline_zoom.setText(f"{state.timeline_zoom / 100:.8g}배")
         self._update_timeline_scrollbar()
         reference = self._timeline_lists[TrackKind.VISUAL]
         reference.horizontalScrollBar().setValue(scroll_position)
@@ -2823,7 +2831,7 @@ class MainWindow(QMainWindow):
         scrollbar = widget.horizontalScrollBar()
         before_extent = max(scrollbar.maximum() + scrollbar.pageStep(), 1)
         anchor = (scrollbar.value() + pointer_x) / before_extent
-        requested = self.controller.state.timeline_zoom + direction * 25
+        requested = self.controller.state.timeline_zoom * (2 if direction > 0 else 0.5)
         if not self.controller.set_timeline_zoom(requested):
             return
         after_extent = max(scrollbar.maximum() + scrollbar.pageStep(), 1)

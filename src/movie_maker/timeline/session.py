@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 
 from movie_maker.project.model import Project, TrackKind
 
@@ -11,11 +12,6 @@ from movie_maker.project.model import Project, TrackKind
 class TimelineViewMode(str, Enum):
     TIMELINE = "타임라인"
     STORYBOARD = "스토리보드"
-
-
-MIN_TIMELINE_ZOOM = 50
-MAX_TIMELINE_ZOOM = 200
-TIMELINE_ZOOM_STEP = 25
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,11 +62,11 @@ class TimelineSelection:
         return TimelineSelection.from_project(project, remaining, active)
 
 
-def normalise_timeline_zoom(value: int) -> int:
-    """Clamp and snap a requested zoom to the shared discrete scale."""
+def normalise_timeline_zoom(value: float) -> float:
+    """Accept a positive finite percentage without an application zoom range."""
 
-    if type(value) is not int:
-        raise TypeError("타임라인 확대 수준은 정수여야 합니다.")
-    clamped = min(MAX_TIMELINE_ZOOM, max(MIN_TIMELINE_ZOOM, value))
-    steps = round((clamped - MIN_TIMELINE_ZOOM) / TIMELINE_ZOOM_STEP)
-    return MIN_TIMELINE_ZOOM + steps * TIMELINE_ZOOM_STEP
+    if type(value) not in (int, float):
+        raise TypeError("타임라인 배율은 숫자여야 합니다.")
+    if not isfinite(value) or value <= 0:
+        raise ValueError("타임라인 배율은 0보다 큰 유한한 값이어야 합니다.")
+    return float(value)

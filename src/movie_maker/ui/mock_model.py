@@ -135,7 +135,7 @@ class MockProjectState:
     is_playing: bool = False
     preview_muted: bool = False
     timeline_mode: str = "타임라인"
-    timeline_zoom: int = 100
+    timeline_zoom: float = 100.0
     export_state: ExportState = ExportState.CLOSED
     export_progress: int = 0
     export_preset: str = "원본 유지"
