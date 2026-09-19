@@ -72,7 +72,7 @@ def test_timeline_selection_updates_preview_and_inspector(qtbot) -> None:
     assert "야시장" in window.preview_canvas.text()
 
 
-def test_timeline_ruler_and_global_playhead_share_track_time_scale(qtbot) -> None:
+def test_global_playhead_shares_track_time_scale_without_timeline_slider(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)
     window.controller.load_sample_project()
@@ -84,16 +84,16 @@ def test_timeline_ruler_and_global_playhead_share_track_time_scale(qtbot) -> Non
     video_track = window.findChild(QListWidget, "E-TIMELINE-VIDEO-TRACK")
     global_playhead = window.findChild(QWidget, "E-TIMELINE-GLOBAL-PLAYHEAD")
 
-    assert ruler is not None
+    assert ruler is None
     assert video_track is not None
     assert global_playhead is not None
-    assert abs(ruler.width() - video_track.viewport().width()) <= 2
+    assert abs(window._timeline_width - video_track.viewport().width()) <= 2
 
     clip_width = sum(
         video_track.visualItemRect(video_track.item(index)).width()
         for index in range(video_track.count())
     )
-    assert abs(clip_width - ruler.width()) <= video_track.count() * 2
+    assert abs(clip_width - window._timeline_width) <= video_track.count() * 2
 
     window.controller.seek(7_000)
     qtbot.wait(10)
@@ -103,12 +103,12 @@ def test_timeline_ruler_and_global_playhead_share_track_time_scale(qtbot) -> Non
     expected_x += round(
         window.controller.state.playhead_ms
         / window.controller.state.total_duration_ms
-        * ruler.width()
+        * window._timeline_width
     )
     assert global_playhead._x == expected_x
 
 
-def test_clicking_either_seek_bar_synchronizes_both_bars_and_playhead(qtbot) -> None:
+def test_dragging_playhead_and_preview_seek_synchronize(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)
     window.controller.load_sample_project()
@@ -121,18 +121,21 @@ def test_clicking_either_seek_bar_synchronizes_both_bars_and_playhead(qtbot) -> 
     global_playhead = window.findChild(QWidget, "E-TIMELINE-GLOBAL-PLAYHEAD")
 
     assert preview_seek is not None
-    assert timeline_ruler is not None
+    assert timeline_ruler is None
     assert global_playhead is not None
 
-    qtbot.mouseClick(
-        timeline_ruler,
-        Qt.MouseButton.LeftButton,
-        pos=QPoint(timeline_ruler.width() // 4, timeline_ruler.height() // 2),
-    )
+    from movie_maker.ui.mock_model import TrackKind
+
+    view = window._timeline_lists[TrackKind.VISUAL]
+    origin = view.viewport().mapTo(window.timeline_page, QPoint(0, 0)).x()
+    qtbot.mousePress(global_playhead, Qt.MouseButton.LeftButton,
+                     pos=QPoint(global_playhead._x, 4))
+    target = QPoint(origin + window._timeline_width // 4, 4)
+    qtbot.mouseMove(global_playhead, target)
+    qtbot.mouseRelease(global_playhead, Qt.MouseButton.LeftButton, pos=target)
     qtbot.wait(10)
 
     first_position = window.controller.state.playhead_ms
-    assert first_position == timeline_ruler.value()
     assert preview_seek.value() == first_position
     assert abs(first_position - round(window.controller.state.total_duration_ms / 4)) <= 100
 
@@ -145,7 +148,6 @@ def test_clicking_either_seek_bar_synchronizes_both_bars_and_playhead(qtbot) -> 
 
     second_position = window.controller.state.playhead_ms
     assert second_position == preview_seek.value()
-    assert timeline_ruler.value() == second_position
     assert abs(second_position - round(window.controller.state.total_duration_ms * 3 / 4)) <= 100
     assert global_playhead._x >= 0
 

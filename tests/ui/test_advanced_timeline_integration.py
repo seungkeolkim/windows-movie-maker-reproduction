@@ -63,7 +63,7 @@ def test_view_zoom_and_noop_drop_are_session_only() -> None:
 
     assert controller.set_timeline_mode("스토리보드")
     assert controller.set_timeline_zoom(174)
-    assert controller.state.timeline_zoom == 175
+    assert controller.state.timeline_zoom == 174
     assert not controller.move_selected_to_index(controller.selected_clip.track, 1)  # type: ignore[union-attr]
 
     assert controller.media_project is project
